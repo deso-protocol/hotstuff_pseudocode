@@ -108,9 +108,9 @@ type TimeoutSyncVoteMessage struct {
 	// Hash of <TimeoutSyncMessage.HighQC, TimeoutSyncMessage.TimeoutQC>
 	TimeoutSyncMessageHash [32]byte
 
-	HaveHigherQC bool
+	Tag QCTag
 
-	// Signature of <TimeoutSyncMessageHash, HaveHigherQC>
+	// Signature of <TimeoutSyncMessageHash, Tag>
 	TimeoutSyncValidatorSignature Signature
 
 	HighQC QuorumCertificate
@@ -129,16 +129,24 @@ type TimeoutSyncVoteMessage struct {
 // the *highest view* that each validator has seen. This allows the next leader to
 // propose a block, while linking back to the most recent valid block that the
 // 2/3rds of validators have seen (i.e. the block with the highest view).
+
+type QCTag byte
+
+const (
+	HighQCTag = QCTag(0)
+	LockQCTag = QCTag(1)
+)
+
 type AggregateQC struct {
 	HighQC QuorumCertificate
 
 	TimeoutQC TimeoutCertificate
 
-	// Signature of <Hash(HighQC.ToBytes(), TimeoutQC.ToBytes()), True>
-	ValidatorsHaveHigherQCSignatures []Signature
+	// Signature of <Hash(HighQC.ToBytes(), TimeoutQC.ToBytes()), HighQCTag>
+	ValidatorsHighQCSignatures []Signature
 
-	// Signature of <Hash(HighQC.ToBytes(), TimeoutQC.ToBytes()), False>
-	ValidatorsNoHigherQCSignatures []Signature
+	// Signature of <Hash(HighQC.ToBytes(), TimeoutQC.ToBytes()), LockQCTag>
+	ValidatorsLockQCSignatures []Signature
 
 	ValidatorsPublicKeys []PublicKey
 
@@ -373,7 +381,7 @@ func validateTimeoutCertificate(tc TimeoutCertificate) bool {
 
 func validateAggregateQC(aggregateQC AggregateQC) bool {
 	// Make sure the lists in the AggregateQC have correct lengths.
-	if len(aggregateQC.ValidatorsHaveHigherQCSignatures)+len(aggregateQC.ValidatorsNoHigherQCSignatures) !=
+	if len(aggregateQC.ValidatorsHighQCSignatures)+len(aggregateQC.ValidatorsLockQCSignatures) !=
 		len(aggregateQC.ValidatorsPublicKeys) {
 
 		return false
@@ -394,17 +402,17 @@ func validateAggregateQC(aggregateQC AggregateQC) bool {
 	}
 
 	// Iterate over all votes of validators who have a higher QC.
-	timeoutSyncMessageHash := Hash(aggregateQC.HighQC, aggregateQC.TimeoutQC)
-	validatorSignaturesList, validatorHaveHigherQCList := FormatAggregateSignaturesIntoList(aggregateQC.ValidatorsHaveHigherQCSignatures,
-		aggregateQC.ValidatorsHaveHigherQCSignatures)
-	for ii := 0; ii < len(aggregateQC.ValidatorsPublicKeys); ii++ {
+	timeoutSyncMessageHash := getTimeoutSyncMessageHash(aggregateQC.HighQC, aggregateQC.TimeoutQC)
+	validatorsSignaturesList, qcTagList, validatorsPublicKeysList := FormatAggregateSignaturesIntoList(
+		aggregateQC.ValidatorsHighQCSignatures, aggregateQC.ValidatorsLockQCSignatures, aggregateQC.ValidatorsPublicKeys)
+	for ii := 0; ii < len(validatorsPublicKeysList); ii++ {
 		// Verify that each signature in ValidatorHighQCSignatures is a valid validator
 		// signature on the <View, QC> pair.
-		haveHigherQC := validatorHaveHigherQCList[ii]
-		payload := Hash(timeoutSyncMessageHash, haveHigherQC)
-		validatorsHaveHigherQCPublicKeys := FormatHaveHighQCPublicKeys(aggregateQC.ValidatorsPublicKeys, HaveHigherQC)
-		if !verifySignature(payload, aggregateQC.validatorSignaturesList[ii],
-			aggregateQC.ValidatorsPublicKeys[ii]) {
+		validatorPublicKey := validatorsPublicKeysList[ii]
+		validatorSignature := validatorsSignaturesList[ii]
+		qcTag := qcTagList[ii]
+		payload := Hash(timeoutSyncMessageHash, qcTag)
+		if !verifySignature(payload, validatorSignature, validatorPublicKey) {
 
 			return false
 		}
@@ -413,16 +421,20 @@ func validateAggregateQC(aggregateQC AggregateQC) bool {
 	return true
 }
 
-func updateLocalQCs(qc QuorumCertificate) {
+func updateLocalQCs(currentBlock Block) {
 	// We update the highestQC if the block we received has one with a higher view.
 	// In the case where we have an AggregateQC, remember that B_current.QC will
 	// line up with the highest QC contained within the AggregateQC.
-	B_current := GetBlockForHash(qc.BlockHash)
-	B2 := GetBlockForHash(B_current.QC.BlockHash)
+	B1 := GetBlockForHash(currentBlock.QC.BlockHash)
+	B2 := GetBlockForHash(B1.QC.BlockHash)
+	B3 := GetBlockForHash(B2.QC.BlockHash)
 
-	if B_current.QC.View > highestQC.View {
+	if currentBlock.QC.View > highestQC.View {
 		highestQC = B_current.QC
-		lockedQC = B2.QC
+	}
+
+	if currentBlock.View == B1.View+1 && B1.View == B2.View+1 {
+		lockedQC = B1.QC
 	}
 }
 
@@ -454,15 +466,22 @@ func handleBlockMessageFromPeer(block *Block) {
 		validateAggregateQC(block.AggregateQC)
 		// We find the QC with the highest view among the QCs contained in the
 		// AggregateQC.
-		if len(block.AggregateQC.ValidatorsHaveHigherQCSignatures) > 0 {
-			safeVote = block.QC.View > block.AggregateQC.HighQC.View
+
+		highQCBlock := GetBlockForHash(block.QC.BlockHash)
+		if len(block.AggregateQC.ValidatorsLockQCSignatures) > 0 {
+			aggregateHighQCBlock := GetBlockForHash(block.AggregateQC.HighQC.BlockHash)
+			// Check if highQCBlock is a child of the aggregateHighQCBlock.
+			// The QC in the block should build on top of the highQC contained in the aggregateQC.
+			safeVote = highQCBlock.IsChild(aggregateHighQCBlock)
 		} else {
 			safeVote = block.QC.ToBytes() == block.AggregateQC.HighQC.ToBytes()
 		}
 
-		if !IsChild(block, GetBlockForHash(lockedQC.BlockHash)) {
+		// Make sure the block uses a higher QC than the lockedQC.
+		if block.QC.View < lockedQC.View {
 			safeVote = false
 		}
+
 		// We make sure that the block’s QC matches the highest QC that we’re
 		// aware of. Notice that we need to check that all of the votes match up
 		// across the two QCs, not just that the views line up, which is why we call
@@ -493,17 +512,17 @@ func handleBlockMessageFromPeer(block *Block) {
 
 	// Our commit rule relies on the fact that blocks were produced without timeouts.
 	// Check if the chain looks like this:
-	// B1 - B2 - B_current (current block)
-	updateLocalQCs(block.QC)
+	// B2 - B1 - B_current (current block) and B2 doesn't have an AggregateQC
+	updateLocalQCs(block)
 
-	B2 := GetBlockForHash(block.QC.BlockHash)
-	B1 := GetBlockForHash(B2.QC.BlockHash)
+	B1 := GetBlockForHash(block.QC.BlockHash)
+	B2 := GetBlockForHash(B1.QC.BlockHash)
 	// Check that B2 is a direct child of B1.
-	if block.View == B2.View+1 && B2.View == B1.View+1 {
+	if block.View == B1.View+1 && B1.View == B2.View+1 && B2.AggregateQC == nil {
 		// A direct chain is formed between B1 and B2, reinforced by the QC
 		// in B_current. This means we should commit all blocks up to and including
 		// block B1.
-		CommitUpToBlock(B1)
+		CommitUpToBlock(B2)
 	}
 }
 
@@ -647,7 +666,7 @@ func handleTimeoutMessageFromPeer(timeoutMsg TimeoutMessage) {
 		HighQC:            validatorHighestQC,
 		TimeoutQC:         timeoutQC,
 	}
-	timeoutSyncMessage.TimeoutSyncProposerSignature = Sign(timeoutSyncMessage, myPrivateKey)
+	timeoutSyncMessage.TimeoutSyncProposerSignature = Sign(timeoutSyncMessage.Hash(), myPrivateKey)
 
 	broadcast(timeoutSyncMessage)
 }
@@ -677,21 +696,22 @@ func validateTimeoutSync(timeoutSyncMsg TimeoutSyncMessage) bool {
 	return true
 }
 
-const (
-	HaveHigherQC = true
-	NoHigherQC   = false
-)
+func getTimeoutSyncMessageHash(highQC QuorumCertificate, timeoutQC TimeoutCertificate) []byte {
+	return Hash(timeoutSyncMsg.HighQC, timeoutSyncMsg.TimeoutQC)
+}
 
-func sendTimeoutVote(view uint64, timeoutSyncMsg TimeoutSyncMessage, haveHigherQC bool) {
+func sendTimeoutVote(timeoutSyncMsg TimeoutSyncMessage, tag QCTag) {
 
-	timeoutSyncMessageHash := Hash(timeoutSyncMsg.HighQC, timeoutSyncMsg.TimeoutQC)
+	timeoutSyncMessageHash := getTimeoutSyncMessageHash(timeoutSyncMsg.HighQC, timeoutSyncMsg.TimeoutQC)
 	timeoutSyncVote := TimeoutSyncVoteMessage{
 		ValidatorPublicKey:     myPublicKey,
 		TimeoutSyncMessageHash: timeoutSyncMessageHash,
+		Tag:                    tag,
+		HighQC:                 highestQC,
 	}
-	timeoutSyncVote.TimeoutSyncValidatorSignature = Sign(Hash(timeoutSyncMessageHash, haveHigherQC), myPrivateKey)
+	timeoutSyncVote.TimeoutSyncValidatorSignature = Sign(Hash(timeoutSyncMessageHash, tag), myPrivateKey)
 
-	Send(timeoutSyncVote, computeLeader(view))
+	Send(timeoutSyncVote, computeLeader(currentView))
 }
 
 func handleTimeoutSyncMessageFromPeer(timeoutSyncMsg TimeoutSyncMessage) {
@@ -699,10 +719,10 @@ func handleTimeoutSyncMessageFromPeer(timeoutSyncMsg TimeoutSyncMessage) {
 		return
 	}
 
-	if timeoutSyncMsg.HighQC.View >= highestQC.View {
-		sendTimeoutVote(timeoutSyncMsg, NoHigherQC)
-	} else if IsChild(GetBlockForHash(timeoutSyncMsg.HighQC.BlockHash), GetBlockForHash(lockedQC.BlockHash)) {
-		sendTimeoutVote(timeoutSyncMsg, HaveHigherQC)
+	if timeoutSyncMsg.HighQC.View == lockedQC.View {
+		sendTimeoutVote(timeoutSyncMsg, LockQCTag)
+	} else if timeoutSyncMsg.HighQC.View > lockedQC.View {
+		sendTimeoutVote(timeoutSyncMsg, HighQCTag)
 	}
 }
 
@@ -715,7 +735,7 @@ func validateTimeoutSyncMessageFromPeer(timeoutSyncVoteMsg TimeoutSyncVoteMessag
 		return false
 	}
 
-	payload := Hash(timeoutSyncVoteMsg.TimeoutSyncMessageHash, timeoutSyncVoteMsg.HaveHigherQC)
+	payload := Hash(timeoutSyncVoteMsg.TimeoutSyncMessageHash, timeoutSyncVoteMsg.Tag)
 	if !VerifySignature(payload, timeoutSyncVoteMsg.ValidatorPublicKey, timeoutSyncVoteMsg.TimeoutSyncValidatorSignature) {
 		return false
 	}
@@ -724,7 +744,7 @@ func validateTimeoutSyncMessageFromPeer(timeoutSyncVoteMsg TimeoutSyncVoteMessag
 		return false
 	}
 
-	if timeoutSyncVoteMsg.HaveHigherQC && timeoutSyncVoteMsg.HighQC.View <= currentTimeoutSync.HighQC.View {
+	if timeoutSyncVoteMsg.Tag == LockQCTag && timeoutSyncVoteMsg.HighQC.View <= currentTimeoutSync.HighQC.View {
 		return false
 	}
 
@@ -743,23 +763,22 @@ func handleTimeoutSyncVoteMessageFromPeer(timeoutSyncVoteMsg TimeoutSyncVoteMess
 
 	timeoutsSyncVotesSeen[timeoutSyncVoteMsg.ValidatorPublicKey] = timeoutSyncVoteMsg
 
-	if timeoutSyncVoteMsg.HighQC.View > timeoutSyncVoteMsg.HighQC.View {
-		updateLocalQCs(timeoutSyncVoteMsg.HighQC)
+	if timeoutSyncVoteMsg.HighQC.View > highestQC.View {
+		highestQC = timeoutSyncVoteMsg.HighQC
 	}
 
 	if ComputeTimeoutStake(timeoutsSeen) < 2/3*GetTOtalStake() {
 		return
 	}
 
-	timeoutSyncHaveHigherVotes, timeoutSyncNoHigherVotes, validatorPublicKeys,
-		highQC := FormatTimeoutSyncQC(timeoutsSyncVotesSeen)
+	timeoutSyncHighQCSignatures, timeoutSyncLockQCSignatures, validatorPublicKeys := FormatTimeoutSyncQC(timeoutsSyncVotesSeen)
 
 	aggregateQC := AggregateQC{
-		HighQC:                           currentTimeoutSync.HighQC,
-		TimeoutQC:                        currentTimeoutSync.TimeoutQC,
-		ValidatorsHaveHigherQCSignatures: timeoutSyncHaveHigherVotes,
-		ValidatorsNoHigherQCSignatures:   timeoutSyncNoHigherVotes,
-		ValidatorsPublicKeys:             validatorPublicKeys,
+		HighQC:                     currentTimeoutSync.HighQC,
+		TimeoutQC:                  currentTimeoutSync.TimeoutQC,
+		ValidatorsHighQCSignatures: timeoutSyncHighQCSignatures,
+		ValidatorsLockQCSignatures: timeoutSyncLockQCSignatures,
+		ValidatorsPublicKeys:       validatorPublicKeys,
 	}
 
 	block := Block{
