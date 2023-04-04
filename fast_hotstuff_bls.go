@@ -156,7 +156,7 @@ type AggregateQC struct {
 	// that have the same payload, i.e. the same (TimeoutView, HighQC.View) pair.
 	// This should generally be fine, however, because the number of unique HighQC.View
 	// values should not generally exceed the number of timed-out views.
-	ValidatorTimeoutHighQCViews []uint64
+	ValidatorTimeoutHighQCViews        []uint64
 	ValidatorCombinedTimeoutSignatures []BLSCombinedSignature
 }
 
@@ -407,14 +407,8 @@ func handleBlockFromPeer(block *Block) {
 		if highestTimeoutQC.View > highestQC.View {
 			highestQC = highestTimeoutQC
 		}
-		// We make sure that the block’s QC matches the highest QC that we’re
-		// aware of. Notice that we need to check that all of the votes match up
-		// across the two QCs, not just that the views line up, which is why we call
-		// ToBytes() to do a "deep equal" comparison. This is because a
-		// malicious leader could potentially produce two different QCs for the
-		// same block by moving the votes around, which would then cause the blocks
-		// to have different hashes.
-		safeVote = block.QC.ToBytes() == highestQC.ToBytes()
+		// We make sure that the block’s QC matches the view of the highest QC that we’re aware of.
+		safeVote = block.QC.View == highestQC.View
 	}
 
 	// If safeVote is true, we will vote on the block.
@@ -425,9 +419,9 @@ func handleBlockFromPeer(block *Block) {
 		blockHashSignature := Sign(payload, myPrivateKey)
 
 		voteMsg := VoteMessage{
-			ValidatorPublicKey: myPublicKey,
-			View:               block.View,
-			BlockHash:          block.Hash(),
+			ValidatorPublicKey:            myPublicKey,
+			View:                          block.View,
+			BlockHash:                     block.Hash(),
 			PartialViewBlockHashSignature: blockHashSignature,
 		}
 		// Send the vote directly to the next leader.
@@ -514,8 +508,8 @@ func handleVoteMessageFromPeer(vote *VoteMessage) {
 	// Construct the QC and note that the BlockHash references the
 	// previous block that we're about to build on top of.
 	qc := QuorumCertificate{
-		View:                        vote.View,
-		BlockHash:                   vote.BlockHash,
+		View:                           vote.View,
+		BlockHash:                      vote.BlockHash,
 		CombinedViewBlockHashSignature: ConstructCombinedSignatureFromVotes(votesSeen),
 	}
 
@@ -594,9 +588,9 @@ func handleTimeoutMessageFromPeer(timeoutMsg TimeoutMessage) {
 	highQC, timeoutHighQCViews, timeoutHighQCCombinedSigs := FormatTimeoutQCs(timeoutsSeen)
 	// Construct the AggregateQC for this view.
 	aggregateQC := AggregateQC{
-		View:                      timeoutMsg.TimeoutView,
-		ValidatorTimeoutHighQC: highQC,
-		ValidatorTimeoutHighQCViews: timeoutHighQCViews,
+		View:                               timeoutMsg.TimeoutView,
+		ValidatorTimeoutHighQC:             highQC,
+		ValidatorTimeoutHighQCViews:        timeoutHighQCViews,
 		ValidatorCombinedTimeoutSignatures: timeoutHighQCCombinedSigs,
 	}
 
@@ -608,8 +602,8 @@ func handleTimeoutMessageFromPeer(timeoutMsg TimeoutMessage) {
 		View:              currentView,
 		// Setting the QC is technically redundant when we have an AggregateQC but
 		// we set it anyway for convenience.
-		QC:                highQC,
-		AggregateQC:       aggregateQC,
+		QC:          highQC,
+		AggregateQC: aggregateQC,
 	}
 
 	// Sign the block using the leader’s private key.
@@ -651,9 +645,9 @@ func StartConsensus() {
 
 			// Construct the timeout message
 			timeoutMsg := TimeoutMessage{
-				ValidatorPublicKey: myPublicKey,
-				TimeoutView:        currentView,
-				HighQC:             highestQC,
+				ValidatorPublicKey:          myPublicKey,
+				TimeoutView:                 currentView,
+				HighQC:                      highestQC,
 				PartialTimeoutViewSignature: Sign(Hash(currentView, highestQC.View), myPrivateKey),
 			}
 
