@@ -433,7 +433,7 @@ func updateLocalQCs(currentBlock Block) {
 		highestQC = B_current.QC
 	}
 
-	if currentBlock.View == B1.View+1 && B1.View == B2.View+1 {
+	if B2.QC.View > lockedQC && currentBlock.View == B1.View+1 && B1.View == B2.View+1 {
 		lockedQC = B1.QC
 	}
 }
@@ -518,7 +518,7 @@ func handleBlockMessageFromPeer(block *Block) {
 	B1 := GetBlockForHash(block.QC.BlockHash)
 	B2 := GetBlockForHash(B1.QC.BlockHash)
 	// Check that B2 is a direct child of B1.
-	if block.View == B1.View+1 && B1.View == B2.View+1 && B2.AggregateQC == nil {
+	if B1.View == B2.View+1 && B2.AggregateQC == nil {
 		// A direct chain is formed between B1 and B2, reinforced by the QC
 		// in B_current. This means we should commit all blocks up to and including
 		// block B1.
