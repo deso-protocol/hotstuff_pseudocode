@@ -1,8 +1,5 @@
 package main
 
-// This corresponds to the Algorithm 3 in the Fast-HotStuff
-// paper https://arxiv.org/pdf/2010.11454.pdf
-
 // Signature represents a standard public/private key
 // signature (e.g. an ECDSA signature)
 type Signature []byte
@@ -406,13 +403,10 @@ func validateAggregateQC(aggregateQC AggregateQC) bool {
 	validatorsSignaturesList, qcTagList, validatorsPublicKeysList := FormatAggregateSignaturesIntoList(
 		aggregateQC.ValidatorsHighQCSignatures, aggregateQC.ValidatorsLockQCSignatures, aggregateQC.ValidatorsPublicKeys)
 	for ii := 0; ii < len(validatorsPublicKeysList); ii++ {
-		// Verify that each signature in ValidatorHighQCSignatures is a valid validator
-		// signature on the <View, QC> pair.
-		validatorPublicKey := validatorsPublicKeysList[ii]
-		validatorSignature := validatorsSignaturesList[ii]
-		qcTag := qcTagList[ii]
-		payload := Hash(timeoutSyncMessageHash, qcTag)
-		if !verifySignature(payload, validatorSignature, validatorPublicKey) {
+		// Verify that each signature in ValidatorHighQCSignatures and ValidatorLockQCSignatures
+		// is a valid validator signature on the <TimeoutSync, Tag> pair.
+		payload := Hash(timeoutSyncMessageHash, qcTagList[ii])
+		if !verifySignature(payload, validatorsSignaturesList[ii], validatorsPublicKeysList[ii]) {
 
 			return false
 		}
@@ -439,7 +433,7 @@ func updateLocalQCs(currentBlock Block) {
 }
 
 // The handleBlockFromPeer is called whenever we receive a block from a peer.
-func handleBlockMessageFromPeer(block *Block) {
+func handleBlockMessageFromPeer(block Block) {
 	// Make sure that the block contains a valid QC, signature, transactions,
 	// and that it's for the current view.
 	if !sanityCheckBlock(block) {
@@ -467,12 +461,8 @@ func handleBlockMessageFromPeer(block *Block) {
 		// We find the QC with the highest view among the QCs contained in the
 		// AggregateQC.
 
-		highQCBlock := GetBlockForHash(block.QC.BlockHash)
 		if len(block.AggregateQC.ValidatorsLockQCSignatures) > 0 {
-			aggregateHighQCBlock := GetBlockForHash(block.AggregateQC.HighQC.BlockHash)
-			// Check if highQCBlock is a child of the aggregateHighQCBlock.
-			// The QC in the block should build on top of the highQC contained in the aggregateQC.
-			safeVote = highQCBlock.IsChild(aggregateHighQCBlock)
+			safeVote = block.QC.View > block.AggregateQC.HighQC.View
 		} else {
 			safeVote = block.QC.ToBytes() == block.AggregateQC.HighQC.ToBytes()
 		}
@@ -794,6 +784,30 @@ func handleTimeoutSyncVoteMessageFromPeer(timeoutSyncVoteMsg TimeoutSyncVoteMess
 	broadcast(block)
 }
 
+func handleTimeout() {
+	// WaitForTimeout() is a function that will emit a value
+	// whenever a timeout is triggered, causing us to enter this part
+	// of the code. It can be assumed that calling
+	// ResetTimeout(timeoutValue) will cause WaitForTimeout() to emit
+	// a value after timeoutValue seconds have elapsed (ignoring all
+	// previous calls to ResetTimeout()).
+
+	// Construct the timeout message
+	timeoutMsg := TimeoutMessage{
+		ValidatorPublicKey: myPublicKey,
+		View:               currentView,
+		HighQC:             highestQC,
+	}
+
+	// Sign the timeout message and send it to the next leader .
+	timeoutMsg.TimoutMsgSignature = Sign(timeoutMsg, myPrivateKey)
+	Send(timeoutMsg, computeLeader(currentView+1))
+
+	// We use exponential backoff for timeouts in this reference
+	// implementation.
+	ResetTimeoutAndAdvanceView(2 * timeoutSeconds)
+}
+
 // This is the node's main message and event handling loop. We continuously loop,
 // incrementing the view with each round.
 func StartConsensus() {
@@ -821,28 +835,10 @@ func StartConsensus() {
 				handleTimeoutSyncVoteMessageFromPeer(messageFromPeer)
 
 			}
+
 		case <-WaitForTimeout():
-			// WaitForTimeout() is a function that will emit a value
-			// whenever a timeout is triggered, causing us to enter this part
-			// of the code. It can be assumed that calling
-			// ResetTimeout(timeoutValue) will cause WaitForTimeout() to emit
-			// a value after timeoutValue seconds have elapsed (ignoring all
-			// previous calls to ResetTimeout()).
+			handleTimeout()
 
-			// Construct the timeout message
-			timeoutMsg := TimeoutMessage{
-				ValidatorPublicKey: myPublicKey,
-				View:               currentView,
-				HighQC:             highestQC,
-			}
-
-			// Sign the timeout message and send it to the next leader .
-			Sign(timeoutMsg, myPrivateKey)
-			Send(timeoutMsg, computeLeader(currentView+1))
-
-			// We use exponential backoff for timeouts in this reference
-			// implementation.
-			ResetTimeoutAndAdvanceView(2 * timeoutSeconds)
 		case <-WaitForQuitSignal():
 			Exit()
 		}
