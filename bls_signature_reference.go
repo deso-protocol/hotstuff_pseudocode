@@ -1,6 +1,6 @@
 //go:build relic
 
-package main
+package fast_hotstuff_bls
 
 import (
 	"context"
