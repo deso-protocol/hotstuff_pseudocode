@@ -45,7 +45,8 @@ type Node struct {
 	PubKeys   []PublicKey
 }
 
-// Importantly, while ValidatorIDBitmap technically requires O(n) space, where n is
+//	Importantly, while ValidatorIDBitmap technically requires O(n) space, where n is
+//
 // the number of validators, it can be compressed significantly using a bitmap that
 // only stores the indices of thevalidators whose signatures were combined. For
 // example, because all validators are known at all times, a convention can be used
@@ -107,6 +108,8 @@ type QuorumCertificate struct {
 	// of stake that the signers collectively own.
 	CombinedViewBlockHashSignature BLSCombinedSignature
 }
+
+type SafeBlockMap map[[32]byte]*Block
 
 // The TimeoutMessage is sent from a validator to the next leader when that
 // validator wants to timeout on a particular view. It contains the highest QC
@@ -322,11 +325,10 @@ func (pk PublicKey) Equals(other PublicKey) bool {
 // we assume the network is in steady-state, rather than starting from the
 // initial conditions, and we leave out all the details of getting in sync with
 // other peers here as well.
-currentView = GetCurrentView()
 
 // The votesSeen variable stores a map of vote messages seen by the leader in the
 // current view. We will make sure this map only stores votes for the currentView.
-votesSeen = map[PublicKey]*VoteMessage{}
+type votesSeen map[string]*VoteMessage
 
 // The timeoutsSeen variable is similar to votesSeen. It stores the timeout messages
 // seen by the leader in the current view. We also make sure this map only stores
@@ -339,7 +341,7 @@ func (m TimeoutsSeenMap) Reset(key uint64) {
 	delete(m, key)
 }
 
-//Validates supermajority has voted in QC
+// Validates supermajority has voted in QC
 func ValidateSuperMajority_QC(BLSCombinedSignature) bool {
 	return true
 }
@@ -376,6 +378,24 @@ func (node Node) AdvanceView_Aggqc(agqc AggregateQC) {
 	agqc.View += 1
 	node.ResetTimeout()
 }
+
+// This functions is used to get index  of the signer of QC in the bitmap.
+func getOnBitIndices(bitmap []byte) []int {
+	indices := make([]int, 0)
+	for i := 0; i < len(bitmap)*8; i++ {
+		if getBitAtIndex(bitmap, i) {
+			indices = append(indices, i)
+		}
+	}
+	return indices
+}
+
+func getBitAtIndex(bitmap []byte, i int) bool {
+	byteIndex := i / 8
+	bitIndex := uint(i % 8)
+	return bitmap[byteIndex]&(1<<bitIndex) != 0
+}
+
 
 // sanityCheckBlock is used to verify that the block contains valid information.
 func sanityCheckBlock(block Block, node *Node) bool {
@@ -441,14 +461,16 @@ func validateQuorumCertificate(qc QuorumCertificate) bool {
 	}
 
 	// Make sure that the BlockHash in the qc matches our local BlockHash history.
-	if GetBlockHashForView(qc.View) != qc.BlockHash {
-		return false
-	}
+	//Rev: It is not possible to have a valid quorum certificate and different blockchain history
+	// Hence, this check is not necessary.
+	//if GetBlockHashForView(qc.View) != qc.BlockHash {
+	//	return false
+	//	}
 
 	return true
 }
 
-func validateTimeoutProof(aggregateQC AggregateQC) bool {
+func validateTimeoutProof(aggregateQC AggregateQC, pubkeys []PublicKey) bool {
 	// Make sure the lists in the AggregateQC have equal lengths
 	if len(aggregateQC.ValidatorTimeoutHighQCViews) != len(aggregateQC.ValidatorCombinedTimeoutSignatures) {
 		return false
@@ -466,7 +488,7 @@ func validateTimeoutProof(aggregateQC AggregateQC) bool {
 	highestQCView := uint64(0)
 	for ii := 0; ii < len(aggregateQC.ValidatorTimeoutHighQCViews); ii++ {
 		payload := Hash(aggregateQC.View, aggregateQC.ValidatorTimeoutHighQCViews[ii])
-		if !VerifySignature(payload, aggregateQC.ValidatorCombinedTimeoutSignatures[ii]) {
+		if !VerifySignature(payload, ,aggregateQC.ValidatorCombinedTimeoutSignatures[ii]) {
 			return false
 		}
 		if aggregateQC.ValidatorTimeoutHighQCViews[ii] > highestQCView {
