@@ -396,6 +396,9 @@ func getBitAtIndex(bitmap []byte, i int) bool {
 	return bitmap[byteIndex]&(1<<bitIndex) != 0
 }
 
+func Send(msg VoteMessage, leader PublicKey) {
+
+}
 
 // sanityCheckBlock is used to verify that the block contains valid information.
 func sanityCheckBlock(block Block, node *Node) bool {
@@ -470,6 +473,7 @@ func validateQuorumCertificate(qc QuorumCertificate) bool {
 	return true
 }
 
+// todo: This function needs to be revised
 func validateTimeoutProof(aggregateQC AggregateQC, pubkeys []PublicKey) bool {
 	// Make sure the lists in the AggregateQC have equal lengths
 	if len(aggregateQC.ValidatorTimeoutHighQCViews) != len(aggregateQC.ValidatorCombinedTimeoutSignatures) {
@@ -485,16 +489,20 @@ func validateTimeoutProof(aggregateQC AggregateQC, pubkeys []PublicKey) bool {
 	}
 
 	// Iterate over all the aggregate qc signatures and verify that the signatures are correct.
+
+	// Rev: Don't need to iterate over all the signatures. Just verify the highQC and the
+	// aggregated signature of the aggregatedQC.
 	highestQCView := uint64(0)
-	for ii := 0; ii < len(aggregateQC.ValidatorTimeoutHighQCViews); ii++ {
-		payload := Hash(aggregateQC.View, aggregateQC.ValidatorTimeoutHighQCViews[ii])
-		if !VerifySignature(payload, ,aggregateQC.ValidatorCombinedTimeoutSignatures[ii]) {
-			return false
-		}
-		if aggregateQC.ValidatorTimeoutHighQCViews[ii] > highestQCView {
-			highestQCView = aggregateQC.ValidatorTimeoutHighQCViews[ii]
-		}
-	}
+
+	//for ii := 0; ii < len(aggregateQC.ValidatorTimeoutHighQCViews); ii++ {
+	//	payload := Hash(aggregateQC.View, aggregateQC.ValidatorTimeoutHighQCViews[ii])
+	//	if !VerifySignature(payload, ,aggregateQC.ValidatorCombinedTimeoutSignatures[ii]) {
+	//		return false
+	//	}
+	//	if aggregateQC.ValidatorTimeoutHighQCViews[ii] > highestQCView {
+	//		highestQCView = aggregateQC.ValidatorTimeoutHighQCViews[ii]
+	//	}
+	//	}
 
 	// The highest QC view found in the signatures should match the highest view
 	// of the HighestQC included in the AggregateQC.
@@ -531,7 +539,7 @@ func handleBlockFromPeer(block *Block, node *Node) {
 		// the block accordingly.
 
 		// First we make sure the block contains a valid AggregateQC.
-		validateTimeoutProof(block.AggregateQC)
+		validateTimeoutProof(block.AggregateQC, node.PubKeys)
 		// We find the QC with the highest view among the QCs contained in the
 		// AggregateQC.
 		highestTimeoutQC := block.AggregateQC.ValidatorTimeoutHighQC
@@ -561,7 +569,7 @@ func handleBlockFromPeer(block *Block, node *Node) {
 		// Send the vote directly to the next leader.
 		Send(voteMsg, computeLeader(node.CurView+1, node.PubKeys))
 		// We can now proceed to the next view.
-		ResetTimeoutAndAdvanceView(GetInitialTimeout())
+		node.AdvanceView_qc(block.QC)
 	}
 
 	// Our commit rule relies on the fact that blocks were produced without timeouts.
