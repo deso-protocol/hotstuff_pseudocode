@@ -37,12 +37,13 @@ type TxnMsg struct {
 }
 
 type Node struct {
-	Id        int
-	CurView   uint64
-	HighestQC *QuorumCertificate
-	PubKey    *PublicKey
-	PrivKey   *PrivateKey
-	PubKeys   []PublicKey
+	Id                  int
+	CurView             uint64
+	HighestQC           *QuorumCertificate
+	PubKey              *PublicKey
+	PrivKey             *PrivateKey
+	PubKeys             []PublicKey
+	LatestCommittedView uint64
 }
 
 //	Importantly, while ValidatorIDBitmap technically requires O(n) space, where n is
@@ -109,7 +110,9 @@ type QuorumCertificate struct {
 	CombinedViewBlockHashSignature BLSCombinedSignature
 }
 
+// Set of SafeBlocks and CommittedBlocks
 type SafeBlockMap map[[32]byte]*Block
+type CommittedBlockMap map[[32]byte]*Block
 
 // The TimeoutMessage is sent from a validator to the next leader when that
 // validator wants to timeout on a particular view. It contains the highest QC
@@ -397,6 +400,53 @@ func getBitAtIndex(bitmap []byte, i int) bool {
 }
 
 func Send(msg VoteMessage, leader PublicKey) {
+
+}
+
+func containsBlock(blockID [32]byte, committedBlocks *CommittedBlockMap) bool {
+	for _, block := range *committedBlocks {
+		if bytes.Equal(block.ID(), blockID[:]) {
+			return true
+		}
+	}
+	return false
+}
+
+func GetBlockIDForView(view uint64, blockMap SafeBlockMap) [32]byte {
+	for _, block := range blockMap {
+		if block.View == view {
+			return block.Hash()
+		}
+	}
+	return nil
+}
+
+func (node *Node) tryCommitGrandParent(block *Block, safeBlocks *SafeBlockMap, committedBlocks *CommittedBlockMap) {
+	parent := (*safeBlocks)[block.QC.BlockHash]
+	grandParent := (*safeBlocks)[parent.QC.BlockHash]
+
+	// this case should just trigger on genesis_case,
+	// as the preconditions on outer calls should check on block validity
+	if parent == nil || grandParent == nil {
+		return
+	}
+
+	canCommit :=
+		parent.View == (grandParent.View + 1)
+	if canCommit {
+		for view := node.LatestCommittedView + 1; view <= grandParent.View; view++ {
+			blockHash := GetBlockIDForView(grandParent.View, *safeBlocks)
+			block, ok := (*safeBlocks)[blockHash]
+			if !ok {
+				break
+			}
+			if _, ok := (*committedBlocks)[block.Hash()]; ok {
+				continue
+			}
+			(*committedBlocks)[block.Hash()] = block
+			incrementLatestCommittedView(view)
+		}
+	}
 
 }
 
