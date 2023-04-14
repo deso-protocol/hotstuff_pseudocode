@@ -257,7 +257,7 @@ func VerifySignature(hash [32]byte, publicKey PublicKey, signature []byte) bool 
 // ResetTimeout() resets timer for a specific duration. Duration is the funciton of the number of times
 // the protocol observed failure. But it should be capped and grandually decreased to a normal acceptable
 // value.
-func (node Node) ResetTimeout() {
+func (node *Node) ResetTimeout() {
 
 }
 
@@ -634,7 +634,7 @@ func verifyValidatorPublicKey(validatorPublicKey PublicKey, publicKeys []PublicK
 }
 
 
-func validateVote(vote VoteMessage, node *Node) bool {
+func validateVote(vote VoteMessage, node *Node, safeblocks *SafeBlockMap) bool {
 	// Make sure the vote is made on the block in the previous view.
 	if vote.View < node.CurView {
 		return false
@@ -646,7 +646,11 @@ func validateVote(vote VoteMessage, node *Node) bool {
 	}
 
 	// Make sure that the BlockHash in the view matches our local BlockHash history.
-	if GetBlockHashForView(vote.View) != vote.BlockHash {
+	blockHash,err :=GetBlockIDForView(vote.View,(*safeblocks))
+	if err!=nil{
+
+	}
+	if blockHash!=vote.BlockHash {
 		return false
 	}
 
