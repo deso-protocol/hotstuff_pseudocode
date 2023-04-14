@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
+	"fmt"
 	"sort"
 )
 
@@ -403,22 +404,13 @@ func Send(msg VoteMessage, leader PublicKey) {
 
 }
 
-func containsBlock(blockID [32]byte, committedBlocks *CommittedBlockMap) bool {
-	for _, block := range *committedBlocks {
-		if bytes.Equal(block.ID(), blockID[:]) {
-			return true
-		}
-	}
-	return false
-}
-
-func GetBlockIDForView(view uint64, blockMap SafeBlockMap) [32]byte {
+func GetBlockIDForView(view uint64, blockMap SafeBlockMap) ([32]byte, error) {
 	for _, block := range blockMap {
 		if block.View == view {
-			return block.Hash()
+			return block.Hash(), nil
 		}
 	}
-	return nil
+	return [32]byte{}, fmt.Errorf("block not found for view %d", view)
 }
 
 func (node *Node) tryCommitGrandParent(block *Block, safeBlocks *SafeBlockMap, committedBlocks *CommittedBlockMap) {
@@ -435,7 +427,10 @@ func (node *Node) tryCommitGrandParent(block *Block, safeBlocks *SafeBlockMap, c
 		parent.View == (grandParent.View + 1)
 	if canCommit {
 		for view := node.LatestCommittedView + 1; view <= grandParent.View; view++ {
-			blockHash := GetBlockIDForView(grandParent.View, *safeBlocks)
+			blockHash, err := GetBlockIDForView(view, *safeBlocks)
+			if err != nil {
+				return
+			}
 			block, ok := (*safeBlocks)[blockHash]
 			if !ok {
 				break
@@ -444,7 +439,7 @@ func (node *Node) tryCommitGrandParent(block *Block, safeBlocks *SafeBlockMap, c
 				continue
 			}
 			(*committedBlocks)[block.Hash()] = block
-			incrementLatestCommittedView(view)
+			node.LatestCommittedView = view
 		}
 	}
 
@@ -564,7 +559,7 @@ func validateTimeoutProof(aggregateQC AggregateQC, pubkeys []PublicKey) bool {
 }
 
 // The handleBlockFromPeer is called whenever we receive a block from a peer.
-func handleBlockFromPeer(block *Block, node *Node) {
+func handleBlockFromPeer(block *Block, node *Node, safeblocks *SafeBlockMap, committedblocks *CommittedBlockMap) {
 	// Make sure that the block contains a valid QC, signature, transactions,
 	// and that it's for the current view.
 	if !sanityCheckBlock(*block, node) {
@@ -626,34 +621,27 @@ func handleBlockFromPeer(block *Block, node *Node) {
 	// Check if the chain looks like this:
 	// B1 - B2 - ... - B_current (current block)
 	// Where ... represent an arbitrary number of skipped views.
-	B_current := block
-	B2 := GetBlockForHash(block.QC.BlockHash)
-	B1 := GetBlockForHash(B2.QC.BlockHash)
-
-	// We update the highestQC if the block we received has one with a higher view.
-	// In the case where we have an AggregateQC, remember that B_current.QC will
-	// line up with the highest QC contained within the AggregateQC.
-	if B_current.QC.View > highestQC.View {
-		highestQC = B_current.QC
-	}
-
-	// Check that B2 is a direct child of B1.
-	if B2.View == B1.View+1 {
-		// A direct chain is formed between B1 and B2, reinforced by the QC
-		// in B_current. This means we should commit all blocks up to and including
-		// block B1.
-		CommitUpToBlock(B1)
-	}
+	node.tryCommitGrandParent(block, safeblocks, committedblocks)
 }
 
-func validateVote(vote VoteMessage) bool {
+func verifyValidatorPublicKey(validatorPublicKey PublicKey, publicKeys []PublicKey) bool {
+	for _, publicKey := range publicKeys {
+		if bytes.Equal(publicKey[:], validatorPublicKey[:]) {
+			return true
+		}
+	}
+	return false
+}
+
+
+func validateVote(vote VoteMessage, node *Node) bool {
 	// Make sure the vote is made on the block in the previous view.
-	if vote.View != currentView-1 {
+	if vote.View < node.CurView {
 		return false
 	}
 
 	// Make sure that the validator is registered.
-	if !verifyValidatorPublicKey(vote.ValidatorPublicKey) {
+	if !verifyValidatorPublicKey(vote.ValidatorPublicKey, node.PubKeys) {
 		return false
 	}
 
