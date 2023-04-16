@@ -5,9 +5,11 @@ package fast_hotstuff
 
 // A BLSPartialSignature is a signature typically made by a validator on a
 // particular payload that can be combined with other signatures from other
-// validators for the same payload. For example, if a hundred validators
-// were to sign Hash(block1.ToBytes()), then all of those signatures could
-// be combined using BLS into a single BLSCombinedSignature.
+// validators for the same or different payload. For example, if a hundred
+// validators were to sign Hash(block1.ToBytes()), then all of those signatures
+// could be combined using BLS into a single BLSMultiSignature. Using
+// a multi-signature scheme, we're also able to combine signatures on
+// different messages into one combined signature.
 //
 // Using BLS signatures is preferred because it's much more space-efficient
 // and computationally efficient than using raw signatures. In addition to
@@ -16,27 +18,30 @@ package fast_hotstuff
 // check, as opposed to checking n signatures individually.
 type BLSPartialSignature []byte
 
-// A BLSCombinedSignature is a signature that is the result of combining multiple
-// BLSPartialSignatures on the same payload. In order to verify a BLSCombinedSignature,
+// A BLSMultiSignature is a multi-signature that is the result of combining multiple
+// BLSPartialSignatures on the same payload. In order to verify a BLSMultiSignature,
 // a validator needs the public keys of all of the validators whose signatures were
 // combined. This is why a secondary field called ValidatorIDBitmap is included
-// in this struct. It allows anyone who receives a BLSCombinedSignature to check it
+// in this struct. It allows anyone who receives a BLSMultiSignature to check it
 // by first looking up the public keys of all of the validators whose signatures were
-// combined, and then verifying the BLSCombinedSignature using those public keys.
+// combined, and then verifying the BLSMultiSignature using those public keys.
+// Along with the BLSMultiSignature, we also need to store the list of messages
+// the were signed by the validators to make this multi-signature. We store this
+// outside the BLSMultiSignature struct, in the AggregateQC.
 //
 // Importantly, while ValidatorIDBitmap technically requires O(n) space, where n is
 // the number of validators, it can be compressed significantly using a bitmap that
-// only stores the indices of thevalidators whose signatures were combined. For
+// stores the indices of the validators whose signatures were combined. For
 // example, because all validators are known at all times, a convention can be used
-// whereby validators are sorted by their public keys, and then the ValidatorIDBitmap
-// is simply a bitmap that stores the indices of the validators whose signatures were
-// combined.
+// whereby validators are sorted by their public keys. Then, the ValidatorIDBitmap
+// is an n-bit number, where the i-th bit determines whether the i-th validator
+// in the sorted list participated it the combined signature.
 //
 // This means that even if you have 10,000 validators involved in a signature, you will
-// only need about a kilobyte of space to store the ValidatorIDBitmap, which is only
-// a little more than the size of a typical transaction on the network.
-type BLSCombinedSignature struct {
-	CombinedSignature []byte
+// only need about a kilobyte of space to store the ValidatorIDBitmap, as the storage
+// cost is asymptotically: 1 bit per validator.
+type BLSMultiSignature struct {
+	CombinedSignature byte
 	ValidatorIDBitmap []byte
 }
 
@@ -79,12 +84,14 @@ type QuorumCertificate struct {
 	// The view corresponding to the block that this QuorumCertificate authorizes.
 	View uint64
 
-	// This signature is a BLSCombinedSignature that is the result of combining
+	// This signature is a BLSMultiSignature that is the result of combining
 	// all of the PartialViewBlockHashSignatures from the VoteMessages that were
 	// aggregated by a leader. Note that the signature includes the ValidatorIDBitmap
 	// which the recipient can use to verify the signature and to verify the amount
-	// of stake that the signers collectively own.
-	CombinedViewBlockHashSignature BLSCombinedSignature
+	// of stake that the signers collectively own. While we refer to this signature
+	// as a multi-signature for simplicity, all validators signed the same message,
+	// being the View.
+	CombinedViewBlockHashSignature BLSMultiSignature
 }
 
 // The TimeoutMessage is sent from a validator to the next leader when that
@@ -122,18 +129,16 @@ type TimeoutMessage struct {
 // weighted by stake, that indicates that these validators want to time out a
 // particular view.
 //
-// The AggregateQC contains the highest QC that all of the validators who timed out
-// are aware of, and combined signatures from all of the validators who timed out.
+// During timeouts, the timeout block leader is supposed to extend the chain from
+// the highest QC that he received from the validators who timed out. And the leader
+// creates the AggregateQC to prove that he has selected the highest QC for his block.
+// The AggregateQC contains a list of high QC views that each validator has signed and
+// sent to the leader along with a single multi-signature that serves as a cryptographic
+// proof of what each validator has said.
 //
-// As one piece of additional complexity, note that the signatures of the validators
-// cannot be naively aggregated into a single BLSCombinedSignature, as the signatures
-// are on different payloads, i.e. different (TimeoutView, HighQC.View) pairs. Instead,
-// the leader must group the signatures for each unique payload, and combine them
-// together into a BLSCombinedSignature for each payload.
-//
-// Importantly, the number of signatures should generally be proportional to the
-// number of views that have timed out. And so the AggregateQC should not generally
-// be much larger than a normal QC.
+// As we're using a BLS multi-signature scheme, we are forced to include the same
+// number of views as there were signers, even if multiple validators signed the
+// same view.
 type AggregateQC struct {
 
 	// The view that this AggregateQC corresponds to. This is the view that the
@@ -147,17 +152,9 @@ type AggregateQC struct {
 	// Here we include a list of the HighQC.View values we got from each of the
 	// validators in the ValidatorTimeoutHighQCViews field. In addition, for each
 	// unique HighQC.View value we received, we combine all the PartialTimeoutViewSignatures
-	// for that HighQC.View into a single BLSCombinedSignature. The
-	// ValidatorCombinedTimeoutSignatures array contains the combined signatures for
-	// each of the unique views in ValidatorTimeoutHighQCViews.
-	//
-	// Notice that we can't include a single BLSCombinedSignature for the entire
-	// set of TimeoutMessages we received because we can only aggregate BLSPartialSignatures
-	// that have the same payload, i.e. the same (TimeoutView, HighQC.View) pair.
-	// This should generally be fine, however, because the number of unique HighQC.View
-	// values should not generally exceed the number of timed-out views.
+	// for that HighQC.View into a single BLSMultiSignature.
 	ValidatorTimeoutHighQCViews        []uint64
-	ValidatorCombinedTimeoutSignatures []BLSCombinedSignature
+	ValidatorCombinedTimeoutSignatures BLSMultiSignature
 }
 
 // Blocks are bundles of transactions proposed by the current leader.
@@ -339,11 +336,6 @@ func validateQuorumCertificate(qc QuorumCertificate) bool {
 }
 
 func validateTimeoutProof(aggregateQC AggregateQC) bool {
-	// Make sure the lists in the AggregateQC have equal lengths
-	if len(aggregateQC.ValidatorTimeoutHighQCViews) != len(aggregateQC.ValidatorCombinedTimeoutSignatures) {
-		return false
-	}
-
 	// Make sure that the validators included in the QC collectively own at least 2/3rds
 	// of the stake. Also make sure there are no repeated public keys.
 	// Note the bitmap in the signature allows us to determine how much stake the
@@ -352,16 +344,20 @@ func validateTimeoutProof(aggregateQC AggregateQC) bool {
 		return false
 	}
 
-	// Iterate over all the aggregate qc signatures and verify that the signatures are correct.
-	highestQCView := 0
+	// Iterate over all the aggregate qc views and verify that the multi-signature is correct.
+	var payloads [][]byte
+	var highestQCView uint64
 	for ii := 0; ii < len(aggregateQC.ValidatorTimeoutHighQCViews); ii++ {
 		payload := Hash(aggregateQC.View, aggregateQC.ValidatorTimeoutHighQCViews[ii])
-		if !VerifySignature(payload, aggregateQC.ValidatorCombinedTimeoutSignatures[ii]) {
-			return false
-		}
+		payloads = append(payloads, payload)
+
 		if aggregateQC.ValidatorTimeoutHighQCViews[ii] > highestQCView {
 			highestQCView = aggregateQC.ValidatorTimeoutHighQCViews[ii]
 		}
+	}
+
+	if !VerifyMultiSignature(payloads, aggregateQC.ValidatorCombinedTimeoutSignatures) {
+		return false
 	}
 
 	// The highest QC view found in the signatures should match the highest view
