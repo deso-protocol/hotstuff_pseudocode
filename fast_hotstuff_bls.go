@@ -5,8 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"math/rand"
 	"sort"
 	"sync"
+	"time"
 )
 
 // This corresponds to the Algorithm 3 in the Fast-HotStuff
@@ -36,6 +38,23 @@ type BLSPartialSignature []byte
 
 // TxnMsg Just creating TxnMsg to avoid errors
 type TxnMsg struct {
+	From   string
+	To     string
+	Amount int
+}
+
+func GenerateTxns(n int) []TxnMsg {
+	rand.Seed(time.Now().UnixNano())
+
+	var txns []TxnMsg
+	for i := 0; i < n; i++ {
+		txns = append(txns, TxnMsg{
+			From:   string(rand.Intn(1000)),
+			To:     string(rand.Intn(1000)),
+			Amount: rand.Intn(100),
+		})
+	}
+	return txns
 }
 
 type Node struct {
@@ -47,6 +66,7 @@ type Node struct {
 	PubKeys             []PublicKey
 	LatestCommittedView uint64
 	Last_voted_view     uint64
+	PubKeyToStake       map[string]int
 }
 
 //	Importantly, while ValidatorIDBitmap technically requires O(n) space, where n is
@@ -358,7 +378,7 @@ func (pk PublicKey) Equals(other PublicKey) bool {
 // current view. We will make sure this map only stores votes for the currentView.
 // Rev: We don't know if the current view of the node is the current view of majority of the network.
 // It is map of the hash(block.view, block.hash) to map string (vote.voter)
-type votesSeen map[[32]byte]map[string][]VoteMessage
+type votesSeen map[[32]byte]map[string]VoteMessage
 
 // The timeoutsSeen variable is similar to votesSeen. It stores the timeout messages
 // seen by the leader in the current view. We also make sure this map only stores
@@ -701,8 +721,8 @@ func validateVote(vote VoteMessage, node *Node, safeblocks *SafeBlockMap) bool {
 
 	return true
 }
-func ComputeVoteStake(votesSeen []VoteMessage, pubKeyToStake map[string]int) int {
-	var totalStake int = 0
+func ComputeVoteStake(votesSeen map[string]VoteMessage, pubKeyToStake map[string]int) int {
+	totalStake := 0
 	for _, vote := range votesSeen {
 		if stake, exists := pubKeyToStake[string(vote.ValidatorPublicKey)]; exists {
 			totalStake += stake
@@ -711,29 +731,38 @@ func ComputeVoteStake(votesSeen []VoteMessage, pubKeyToStake map[string]int) int
 	return totalStake
 }
 
-func AppendVoteMessage(votesSeen *map[[32]byte]map[string][]VoteMessage, vote VoteMessage) {
+// In correct need to be fixed. Validator public key
+func AppendVoteMessage(votesSeen *map[[32]byte]map[string]VoteMessage, vote VoteMessage) {
 	// Check if the outer key exists in the map
 	innerMap, ok := (*votesSeen)[Hash(vote.View, vote.BlockHash)]
 	if !ok {
 		// Initialize the inner map if it doesn't exist
-		innerMap = make(map[string][]VoteMessage)
+		innerMap = make(map[string]VoteMessage)
 		(*votesSeen)[Hash(vote.View, vote.BlockHash)] = innerMap
 	}
 
 	// Check if the inner key exists in the inner map
-	voteMessages, ok := innerMap[string(vote.ValidatorPublicKey)]
-	if !ok {
-		// Initialize the slice if it doesn't exist
-		voteMessages = []VoteMessage{}
-		innerMap[string(vote.ValidatorPublicKey)] = voteMessages
+	_, ok = innerMap[string(vote.ValidatorPublicKey)]
+	if ok {
+		// If the inner key exists, the validator has already voted for the given (view, blockHash) pair
+		// and the new vote should be rejected.
+		return
 	}
 
-	// Append the new vote message to the slice
-	innerMap[string(vote.ValidatorPublicKey)] = append(voteMessages, vote)
+	// Add the new vote to the inner map
+	innerMap[string(vote.ValidatorPublicKey)] = vote
+}
+
+func GetTotalStake(pubKeyToStake map[string]int) int {
+	totalStake := 0
+	for _, stake := range pubKeyToStake {
+		totalStake += stake
+	}
+	return totalStake
 }
 
 // The handleVoteMessageFromPeer is called whenever we receive a vote from a peer.
-func handleVoteMessageFromPeer(vote *VoteMessage, node *Node, safeblocks *SafeBlockMap, voteseen *map[[32]byte]map[string][]VoteMessage) {
+func handleVoteMessageFromPeer(vote *VoteMessage, node *Node, safeblocks *SafeBlockMap, voteseen *map[[32]byte]map[string]VoteMessage) {
 	// If we're not the leader, ignore all votes.
 	if !node.AmIaLeader(vote.View + 1) {
 		return
@@ -751,7 +780,9 @@ func handleVoteMessageFromPeer(vote *VoteMessage, node *Node, safeblocks *SafeBl
 	AppendVoteMessage(voteseen, *vote)
 
 	// Check if we’ve gathered votes from 2/3rds of the validators, weighted by stake.
-	if ComputeVoteStake(votesSeen[Hash(vote.View,vote.BlockHash)][string(vote.ValidatorPublicKey)],node.) < 2/3*GetTotalStake() {
+
+	voteStake := ComputeVoteStake((*voteseen)[Hash(vote.View, vote.BlockHash)], node.PubKeyToStake)
+	if voteStake < 2*GetTotalStake(node.PubKeyToStake)/3 {
 		return
 	}
 
@@ -762,27 +793,36 @@ func handleVoteMessageFromPeer(vote *VoteMessage, node *Node, safeblocks *SafeBl
 	// previous block that we're about to build on top of.
 	qc := QuorumCertificate{
 		View:                           vote.View,
-		BlockHash:                      vote.BlockHash,
-		CombinedViewBlockHashSignature: ConstructCombinedSignatureFromVotes(votesSeen),
+		BlockHash:                      vote.BlockHash, //Just for testing purposes.
+		CombinedViewBlockHashSignature: BLSCombinedSignature{[]byte("a"), []byte("a")},
 	}
 
 	// Construct the block
 	block := Block{
 		PreviousBlockHash: qc.BlockHash,
-		ProposerPublicKey: myPublicKey,
-		Txns:              GetTxns(),
-		View:              currentView,
+		ProposerPublicKey: *node.PubKey,
+		Txns:              GenerateTxns(),
+		View:              node.CurView,
 		QC:                qc,
-		AggregateQC:       nil,
+		AggregateQC: AggregateQC{
+			View:                               0,
+			ValidatorTimeoutHighQC:             QuorumCertificate{},
+			ValidatorTimeoutHighQCViews:        nil,
+			ValidatorCombinedTimeoutSignatures: nil,
+		},
 	}
 
 	// Sign the block using the leader’s private key.
-	block.ProposerSignature = Sign(block.Hash(), myPrivateKey)
+	block.ProposerSignature, _ = Sign(block.Hash(), *node.PrivKey)
 	// Blast the block to everyone including yourself. This means we'll process
 	// this block in handleBlockFromPeer, where we'll also update our highestQC and
 	// advance to the next view. As such, there is no reason to
 	// call ResetTimeoutAndAdvanceView() here.
 	broadcast(block)
+}
+
+func broadcast(block Block) {
+
 }
 
 func validateTimeout(timeout TimeoutMessage) bool {
