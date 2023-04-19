@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"sort"
+	"sync"
 )
 
 // This corresponds to the Algorithm 3 in the Fast-HotStuff
@@ -45,6 +46,7 @@ type Node struct {
 	PrivKey             *PrivateKey
 	PubKeys             []PublicKey
 	LatestCommittedView uint64
+	Last_voted_view     uint64
 }
 
 //	Importantly, while ValidatorIDBitmap technically requires O(n) space, where n is
@@ -112,8 +114,22 @@ type QuorumCertificate struct {
 }
 
 // Set of SafeBlocks and CommittedBlocks
-type SafeBlockMap map[[32]byte]*Block
-type CommittedBlockMap map[[32]byte]*Block
+type SafeBlockMap struct {
+	Blocks map[[32]byte]*Block
+	Mutex  sync.Mutex
+}
+type CommittedBlockMap struct {
+	Block map[[32]byte]*Block
+	Mutex sync.Mutex
+}
+
+func (aqc AggregateQC) isEmpty() bool {
+	if aqc.View == 0 && aqc.ValidatorCombinedTimeoutSignatures == nil {
+		return true
+
+	}
+	return false
+}
 
 // The TimeoutMessage is sent from a validator to the next leader when that
 // validator wants to timeout on a particular view. It contains the highest QC
@@ -279,6 +295,14 @@ func computeLeader(viewNum uint64, pubKeys []PublicKey) PublicKey {
 	return pubKeys[idx]
 }
 
+func (node *Node) AmIaLeader(viewNum uint64) bool {
+	pubkey := computeLeader(viewNum, node.PubKeys)
+	if pubkey.Equals(*node.PubKey) {
+		return true
+	}
+	return false
+}
+
 func Hash(x uint64, y interface{}) [32]byte {
 	var buf []byte
 	switch y := y.(type) {
@@ -332,14 +356,17 @@ func (pk PublicKey) Equals(other PublicKey) bool {
 
 // The votesSeen variable stores a map of vote messages seen by the leader in the
 // current view. We will make sure this map only stores votes for the currentView.
-type votesSeen map[string]*VoteMessage
+// Rev: We don't know if the current view of the node is the current view of majority of the network.
+// It is map of the hash(block.view, block.hash) to map string (vote.voter)
+type votesSeen map[[32]byte]map[string][]VoteMessage
 
 // The timeoutsSeen variable is similar to votesSeen. It stores the timeout messages
 // seen by the leader in the current view. We also make sure this map only stores
 // timeouts for the current view.
 
-// A node might
-type TimeoutsSeenMap map[uint64]map[[32]byte][]TimeoutMessage
+// Rev: We don't know if the current view of the node is the current view of majority of the network.
+// It is map of the hash(block.view, block.hash) to map string (timeoutMessage.ValidatorPublickey)
+type TimeoutsSeenMap map[[32]byte]map[string][]TimeoutMessage
 
 func (m TimeoutsSeenMap) Reset(key uint64) {
 	delete(m, key)
@@ -405,7 +432,7 @@ func Send(msg VoteMessage, leader PublicKey) {
 }
 
 func GetBlockIDForView(view uint64, blockMap SafeBlockMap) ([32]byte, error) {
-	for _, block := range blockMap {
+	for _, block := range blockMap.Blocks {
 		if block.View == view {
 			return block.Hash(), nil
 		}
@@ -413,36 +440,39 @@ func GetBlockIDForView(view uint64, blockMap SafeBlockMap) ([32]byte, error) {
 	return [32]byte{}, fmt.Errorf("block not found for view %d", view)
 }
 
-func (node *Node) tryCommitGrandParent(block *Block, safeBlocks *SafeBlockMap, committedBlocks *CommittedBlockMap) {
-	parent := (*safeBlocks)[block.QC.BlockHash]
-	grandParent := (*safeBlocks)[parent.QC.BlockHash]
-
-	// this case should just trigger on genesis_case,
-	// as the preconditions on outer calls should check on block validity
-	if parent == nil || grandParent == nil {
+func (node *Node) commitChainFromGrandParent(block *Block, safeblocks *SafeBlockMap, committedBlocks *CommittedBlockMap) {
+	parent := safeblocks.Blocks[block.QC.BlockHash]
+	if parent == nil {
 		return
 	}
 
-	canCommit :=
-		parent.View == (grandParent.View + 1)
-	if canCommit {
-		for view := node.LatestCommittedView + 1; view <= grandParent.View; view++ {
-			blockHash, err := GetBlockIDForView(view, *safeBlocks)
-			if err != nil {
-				return
-			}
-			block, ok := (*safeBlocks)[blockHash]
-			if !ok {
-				break
-			}
-			if _, ok := (*committedBlocks)[block.Hash()]; ok {
-				continue
-			}
-			(*committedBlocks)[block.Hash()] = block
-			node.LatestCommittedView = view
-		}
+	grandParent := safeblocks.Blocks[parent.QC.BlockHash]
+	if grandParent == nil {
+		return
 	}
 
+	if parent.View != (grandParent.View + 1) {
+		return
+	}
+
+	for view := node.LatestCommittedView + 1; view <= grandParent.View; view++ {
+		blockHash, err := GetBlockIDForView(view, *safeblocks)
+		if err != nil {
+			return
+		}
+
+		block, ok := safeblocks.Blocks[blockHash]
+		if !ok {
+			break
+		}
+
+		if _, ok := committedBlocks.Block[blockHash]; ok {
+			continue
+		}
+
+		committedBlocks.Block[blockHash] = block
+		node.LatestCommittedView = view
+	}
 }
 
 // sanityCheckBlock is used to verify that the block contains valid information.
@@ -558,6 +588,12 @@ func validateTimeoutProof(aggregateQC AggregateQC, pubkeys []PublicKey) bool {
 	return true
 }
 
+func (sbm *SafeBlockMap) Put(block *Block) {
+	sbm.Mutex.Lock()
+	defer sbm.Mutex.Unlock()
+	sbm.Blocks[block.Hash()] = block
+}
+
 // The handleBlockFromPeer is called whenever we receive a block from a peer.
 func handleBlockFromPeer(block *Block, node *Node, safeblocks *SafeBlockMap, committedblocks *CommittedBlockMap) {
 	// Make sure that the block contains a valid QC, signature, transactions,
@@ -572,7 +608,7 @@ func handleBlockFromPeer(block *Block, node *Node, safeblocks *SafeBlockMap, com
 	// If the block doesn’t contain an AggregateQC, then that indicates that we
 	// did NOT timeout in the previous view, which means we should just check that
 	// the QC corresponds to the previous view.
-	if &block.AggregateQC == nil {
+	if block.AggregateQC.isEmpty() {
 		// The block is safe to vote on if it is a direct child of the previous
 		// block. This means that the parent and child blocks have consecutive
 		// views. We use the current block’s QC to find the view of the parent.
@@ -615,13 +651,17 @@ func handleBlockFromPeer(block *Block, node *Node, safeblocks *SafeBlockMap, com
 		Send(voteMsg, computeLeader(node.CurView+1, node.PubKeys))
 		// We can now proceed to the next view.
 		node.AdvanceView_qc(block.QC)
+
+		// Add the block to the safeblocks struct.
+		safeblocks.Put(block)
 	}
 
 	// Our commit rule relies on the fact that blocks were produced without timeouts.
 	// Check if the chain looks like this:
 	// B1 - B2 - ... - B_current (current block)
 	// Where ... represent an arbitrary number of skipped views.
-	node.tryCommitGrandParent(block, safeblocks, committedblocks)
+
+	node.commitChainFromGrandParent(block, safeblocks, committedblocks)
 }
 
 func verifyValidatorPublicKey(validatorPublicKey PublicKey, publicKeys []PublicKey) bool {
@@ -632,7 +672,6 @@ func verifyValidatorPublicKey(validatorPublicKey PublicKey, publicKeys []PublicK
 	}
 	return false
 }
-
 
 func validateVote(vote VoteMessage, node *Node, safeblocks *SafeBlockMap) bool {
 	// Make sure the vote is made on the block in the previous view.
@@ -646,11 +685,11 @@ func validateVote(vote VoteMessage, node *Node, safeblocks *SafeBlockMap) bool {
 	}
 
 	// Make sure that the BlockHash in the view matches our local BlockHash history.
-	blockHash,err :=GetBlockIDForView(vote.View,(*safeblocks))
-	if err!=nil{
+	blockHash, err := GetBlockIDForView(vote.View, (*safeblocks))
+	if err != nil {
 
 	}
-	if blockHash!=vote.BlockHash {
+	if blockHash != vote.BlockHash {
 		return false
 	}
 
@@ -662,27 +701,57 @@ func validateVote(vote VoteMessage, node *Node, safeblocks *SafeBlockMap) bool {
 
 	return true
 }
+func ComputeVoteStake(votesSeen []VoteMessage, pubKeyToStake map[string]int) int {
+	var totalStake int = 0
+	for _, vote := range votesSeen {
+		if stake, exists := pubKeyToStake[string(vote.ValidatorPublicKey)]; exists {
+			totalStake += stake
+		}
+	}
+	return totalStake
+}
+
+func AppendVoteMessage(votesSeen *map[[32]byte]map[string][]VoteMessage, vote VoteMessage) {
+	// Check if the outer key exists in the map
+	innerMap, ok := (*votesSeen)[Hash(vote.View, vote.BlockHash)]
+	if !ok {
+		// Initialize the inner map if it doesn't exist
+		innerMap = make(map[string][]VoteMessage)
+		(*votesSeen)[Hash(vote.View, vote.BlockHash)] = innerMap
+	}
+
+	// Check if the inner key exists in the inner map
+	voteMessages, ok := innerMap[string(vote.ValidatorPublicKey)]
+	if !ok {
+		// Initialize the slice if it doesn't exist
+		voteMessages = []VoteMessage{}
+		innerMap[string(vote.ValidatorPublicKey)] = voteMessages
+	}
+
+	// Append the new vote message to the slice
+	innerMap[string(vote.ValidatorPublicKey)] = append(voteMessages, vote)
+}
 
 // The handleVoteMessageFromPeer is called whenever we receive a vote from a peer.
-func handleVoteMessageFromPeer(vote *VoteMessage) {
+func handleVoteMessageFromPeer(vote *VoteMessage, node *Node, safeblocks *SafeBlockMap, voteseen *map[[32]byte]map[string][]VoteMessage) {
 	// If we're not the leader, ignore all votes.
-	if !IsLeader(currentView) {
+	if !node.AmIaLeader(vote.View + 1) {
 		return
 	}
 
 	// Make sure that the vote is for the currentView and validate
 	// the vote’s signature. We also run a check to make sure we didn’t
 	// already receive a timeout or another vote from this peer.
-	if !validateVote(vote) {
+	if !validateVote(*vote, node, safeblocks) {
 		return
 	}
 
 	// If we get here, it means we are the leader so add the vote to our map of
 	// votes seen.
-	votesSeen[vote.ValidatorPublicKey] = vote
+	AppendVoteMessage(voteseen, *vote)
 
 	// Check if we’ve gathered votes from 2/3rds of the validators, weighted by stake.
-	if ComputeVoteStake(votesSeen) < 2/3*GetTotalStake() {
+	if ComputeVoteStake(votesSeen[Hash(vote.View,vote.BlockHash)][string(vote.ValidatorPublicKey)],node.) < 2/3*GetTotalStake() {
 		return
 	}
 
@@ -738,9 +807,9 @@ func validateTimeout(timeout TimeoutMessage) bool {
 
 // The handleTimeoutMessageFromPeer is called whenever we receive a timeout
 // from a peer.
-func handleTimeoutMessageFromPeer(timeoutMsg TimeoutMessage) {
+func handleTimeoutMessageFromPeer(timeoutMsg TimeoutMessage, node *Node) {
 	// If we're not the leader, ignore all timeout messages.
-	if !IsLeader(vote.View) {
+	if !node.AmIaLeader(vote.View) {
 		return
 	}
 

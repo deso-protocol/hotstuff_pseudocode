@@ -4,7 +4,7 @@
     <option name="autoReloadType" value="ALL" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="4f16aba9-ec1f-4096-b5d8-e31689d9ce73" name="Changes" comment="Fixing errors">
+    <list default="true" id="4f16aba9-ec1f-4096-b5d8-e31689d9ce73" name="Changes" comment="Fixing computeVoteStake []byte can't be used as key to a map">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/fast_hotstuff_bls.go" beforeDir="false" afterPath="$PROJECT_DIR$/fast_hotstuff_bls.go" afterDir="false" />
     </list>
@@ -47,7 +47,7 @@
     "go.import.settings.migrated": "true",
     "last_opened_file_path": "/Users/mohammad-az",
     "run.code.analysis.last.selected.profile": "pProject Default",
-    "settings.editor.selected.configurable": "preferences.keymap"
+    "settings.editor.selected.configurable": "com.goide.configuration.GoLibrariesConfigurableProvider"
   }
 }]]></component>
   <component name="RecentsManager">
@@ -104,9 +104,11 @@
     <MESSAGE value="Clearning, fixing errors" />
     <MESSAGE value="Cleaning, fixing errors" />
     <MESSAGE value="Try committing grandparent chain" />
-    <MESSAGE value="verifyValidatorPublicKey" />
     <MESSAGE value="Fixing errors" />
-    <option name="LAST_COMMIT_MESSAGE" value="Fixing errors" />
+    <MESSAGE value="verifyValidatorPublicKey" />
+    <MESSAGE value="Handle block and validate block" />
+    <MESSAGE value="Fixing computeVoteStake []byte can't be used as key to a map" />
+    <option name="LAST_COMMIT_MESSAGE" value="Fixing computeVoteStake []byte can't be used as key to a map" />
   </component>
   <component name="VgoProject">
     <settings-migrated>true</settings-migrated>
