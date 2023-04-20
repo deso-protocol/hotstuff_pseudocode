@@ -167,7 +167,7 @@ type TimeoutMessage struct {
 
 	// The view that the validator wants to skip over (because they haven't received a
 	// valid block for it and they timed out).
-	TimeoutView uint64
+	View uint64
 
 	// The QuorumCertificate with the highest view that the validator is aware
 	// of. This QC allows the leader to link back to the most recent block that
@@ -388,7 +388,7 @@ type votesSeen map[[32]byte]map[string]VoteMessage
 // It is map of the hash(block.view, block.hash) to map string (timeoutMessage.ValidatorPublickey)
 type TimeoutsSeenMap map[[32]byte]map[string][]TimeoutMessage
 
-func (m TimeoutsSeenMap) Reset(key uint64) {
+func (m TimeoutsSeenMap) Reset(key [32]byte) {
 	delete(m, key)
 }
 
@@ -801,7 +801,7 @@ func handleVoteMessageFromPeer(vote *VoteMessage, node *Node, safeblocks *SafeBl
 	block := Block{
 		PreviousBlockHash: qc.BlockHash,
 		ProposerPublicKey: *node.PubKey,
-		Txns:              GenerateTxns(),
+		Txns:              GenerateTxns(10),
 		View:              node.CurView,
 		QC:                qc,
 		AggregateQC: AggregateQC{
@@ -825,9 +825,11 @@ func broadcast(block Block) {
 
 }
 
-func validateTimeout(timeout TimeoutMessage) bool {
+// /Needs to be redone.
+// /Needs to be redone
+func validateTimeout(timeout TimeoutMessage, node *Node) bool {
 	// Make sure that the validator is registered.
-	if !verifyValidatorPublicKey(vote.ValidatorPublicKey) {
+	if !verifyValidatorPublicKey(timeout.ValidatorPublicKey, node.PubKeys) {
 		return false
 	}
 
@@ -837,7 +839,7 @@ func validateTimeout(timeout TimeoutMessage) bool {
 	}
 
 	// Verify the validator signature
-	payload := Hash(view, timeout.HighQC.View)
+	payload := Hash(timeout.View, timeout.HighQC.View)
 	if !VerifySignature(payload, timeout.ValidatorPublicKey, timeout.PartialTimeoutViewSignature) {
 		return false
 	}
@@ -849,14 +851,14 @@ func validateTimeout(timeout TimeoutMessage) bool {
 // from a peer.
 func handleTimeoutMessageFromPeer(timeoutMsg TimeoutMessage, node *Node) {
 	// If we're not the leader, ignore all timeout messages.
-	if !node.AmIaLeader(vote.View) {
+	if !node.AmIaLeader(timeoutMsg.View) {
 		return
 	}
 
 	// Make sure that the timeoutMsg is for the most recent view and validate all of
 	// its signatures, including those for its HighQC. We also run a check to make
 	// sure we didn’t already receive a timeout or another vote from this peer.
-	if !validateTimeout(timeoutMsg) {
+	if !validateTimeout(timeoutMsg, node) {
 		return
 	}
 

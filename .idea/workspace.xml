@@ -4,7 +4,7 @@
     <option name="autoReloadType" value="ALL" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="4f16aba9-ec1f-4096-b5d8-e31689d9ce73" name="Changes" comment="Revising ComputeVoteStak">
+    <list default="true" id="4f16aba9-ec1f-4096-b5d8-e31689d9ce73" name="Changes" comment="handleVoteMessageFromPeer">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/fast_hotstuff_bls.go" beforeDir="false" afterPath="$PROJECT_DIR$/fast_hotstuff_bls.go" afterDir="false" />
     </list>
@@ -110,7 +110,8 @@
     <MESSAGE value="Fixing computeVoteStake []byte can't be used as key to a map" />
     <MESSAGE value="Append Vote message" />
     <MESSAGE value="Revising ComputeVoteStak" />
-    <option name="LAST_COMMIT_MESSAGE" value="Revising ComputeVoteStak" />
+    <MESSAGE value="handleVoteMessageFromPeer" />
+    <option name="LAST_COMMIT_MESSAGE" value="handleVoteMessageFromPeer" />
   </component>
   <component name="VgoProject">
     <settings-migrated>true</settings-migrated>
