@@ -5,7 +5,6 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="4f16aba9-ec1f-4096-b5d8-e31689d9ce73" name="Changes" comment="Timeout">
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/fast_hotstuff_bls.go" beforeDir="false" afterPath="$PROJECT_DIR$/fast_hotstuff_bls.go" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />

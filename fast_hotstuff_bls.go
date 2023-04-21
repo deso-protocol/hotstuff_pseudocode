@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"math/rand"
 	"sort"
 	"sync"
@@ -144,7 +145,7 @@ type CommittedBlockMap struct {
 }
 
 func (aqc AggregateQC) isEmpty() bool {
-	if aqc.View == 0 && aqc.ValidatorCombinedTimeoutSignatures == nil {
+	if aqc.View == 0 && aqc.ValidatorCombinedTimeoutSignatures.CombinedSignature == nil {
 		return true
 
 	}
@@ -222,8 +223,10 @@ type AggregateQC struct {
 	// that have the same payload, i.e. the same (TimeoutView, HighQC.View) pair.
 	// This should generally be fine, however, because the number of unique HighQC.View
 	// values should not generally exceed the number of timed-out views.
-	ValidatorTimeoutHighQCViews        []uint64
-	ValidatorCombinedTimeoutSignatures []BLSCombinedSignature
+	ValidatorTimeoutHighQCViews []uint64
+	//todo: Need to properly implemented as bls aggregated signature over timeoutMessage.View and
+	//todo:list of timeoutMessage.HighQC.view
+	ValidatorCombinedTimeoutSignatures BLSCombinedSignature
 }
 
 //  Blocks are bundles of transactions proposed by the current leader.
@@ -398,7 +401,7 @@ func ValidateSuperMajority_QC(BLSCombinedSignature) bool {
 }
 
 // ValidateSuperMajority_AggQC Validate super majority has sent their timeout msgs
-func ValidateSuperMajority_AggQC([]BLSCombinedSignature) bool {
+func ValidateSuperMajority_AggQC(BLSCombinedSignature) bool {
 	//
 	return true
 }
@@ -520,6 +523,11 @@ func sanityCheckBlock(block Block, node *Node) bool {
 		return false
 	}
 
+	if block.View <= node.Last_voted_view {
+		//Have already voted for the block.
+		return false
+	}
+
 	// Check that the block's proposer is the expected leader for the current view.
 	if !block.ProposerPublicKey.Equals(computeLeader(block.View, node.PubKeys)) {
 		return false
@@ -571,7 +579,7 @@ func validateQuorumCertificate(qc QuorumCertificate) bool {
 // todo: This function needs to be revised
 func validateTimeoutProof(aggregateQC AggregateQC, pubkeys []PublicKey) bool {
 	// Make sure the lists in the AggregateQC have equal lengths
-	if len(aggregateQC.ValidatorTimeoutHighQCViews) != len(aggregateQC.ValidatorCombinedTimeoutSignatures) {
+	if len(aggregateQC.ValidatorTimeoutHighQCViews) != len(aggregateQC.ValidatorCombinedTimeoutSignatures.ValidatorIDBitmap) {
 		return false
 	}
 
@@ -671,6 +679,7 @@ func handleBlockFromPeer(block *Block, node *Node, safeblocks *SafeBlockMap, com
 		Send(voteMsg, computeLeader(node.CurView+1, node.PubKeys))
 		// We can now proceed to the next view.
 		node.AdvanceView_qc(block.QC)
+		node.Last_voted_view = uint64(math.Max(float64(node.Last_voted_view), float64(node.CurView)))
 
 		// Add the block to the safeblocks struct.
 		safeblocks.Put(block)
@@ -817,7 +826,7 @@ func handleVoteMessageFromPeer(vote *VoteMessage, node *Node, safeblocks *SafeBl
 			View:                               0,
 			ValidatorTimeoutHighQC:             QuorumCertificate{},
 			ValidatorTimeoutHighQCViews:        nil,
-			ValidatorCombinedTimeoutSignatures: nil,
+			ValidatorCombinedTimeoutSignatures: BLSCombinedSignature{[]byte("a"), []byte("a")},
 		},
 	}
 
@@ -877,6 +886,30 @@ func AppendTimeoutMessage(timeoutsSeen *map[[32]byte]map[string]TimeoutMessage, 
 	innerMap[string(timeout.ValidatorPublicKey)] = timeout
 }
 
+func GetHighestViewHighQC(timeoutSeen map[string]TimeoutMessage) QuorumCertificate {
+	highestView := uint64(0)
+	var highestHighQC QuorumCertificate
+
+	for _, timeout := range timeoutSeen {
+		if timeout.HighQC.View > highestView {
+			highestView = timeout.HighQC.View
+			highestHighQC = timeout.HighQC
+
+		}
+	}
+
+	return highestHighQC
+}
+func GetTimeouthighQcViews(timeoutSeen map[string]TimeoutMessage) []uint64 {
+	views := []uint64{}
+
+	for _, timeout := range timeoutSeen {
+		views = append(views, timeout.HighQC.View)
+	}
+
+	return views
+}
+
 // The handleTimeoutMessageFromPeer is called whenever we receive a timeout
 // from a peer.
 func handleTimeoutMessageFromPeer(timeoutMsg TimeoutMessage, node *Node, timeoutseen *map[[32]byte]map[string]TimeoutMessage) {
@@ -911,21 +944,23 @@ func handleTimeoutMessageFromPeer(timeoutMsg TimeoutMessage, node *Node, timeout
 	// validatorHighQCs list of all the QCs sent to use by the validators, along
 	// with their signatures. We also find the QC with the highest view among the
 	// validatorHighQCs.
-	highQC, timeoutHighQCViews, timeoutHighQCCombinedSigs := FormatTimeoutQCs(timeoutsSeenMap)
+	highQC := GetHighestViewHighQC((*timeoutseen)[Hash(timeoutMsg.View, timeoutMsg.HighQC.View)])
+	views := GetTimeouthighQcViews((*timeoutseen)[Hash(timeoutMsg.View, timeoutMsg.HighQC.View)])
+	//highQC, timeoutHighQCViews, timeoutHighQCCombinedSigs := FormatTimeoutQCs(timeoutsSeenMap)
 	// Construct the AggregateQC for this view.
 	aggregateQC := AggregateQC{
-		View:                               timeoutMsg.TimeoutView,
+		View:                               timeoutMsg.View,
 		ValidatorTimeoutHighQC:             highQC,
-		ValidatorTimeoutHighQCViews:        timeoutHighQCViews,
-		ValidatorCombinedTimeoutSignatures: timeoutHighQCCombinedSigs,
+		ValidatorTimeoutHighQCViews:        views,
+		ValidatorCombinedTimeoutSignatures: BLSCombinedSignature{[]byte("a"), []byte("a")},
 	}
 
 	// Construct the block and include the aggregateQC.
 	block := Block{
 		PreviousBlockHash: highQC.BlockHash,
-		ProposerPublicKey: myPublicKey,
-		Txns:              GetTxns(),
-		View:              currentView,
+		ProposerPublicKey: *node.PubKey,
+		Txns:              GenerateTxns(10),
+		View:              node.CurView,
 		// Setting the QC is technically redundant when we have an AggregateQC but
 		// we set it anyway for convenience.
 		QC:          highQC,
@@ -933,7 +968,7 @@ func handleTimeoutMessageFromPeer(timeoutMsg TimeoutMessage, node *Node, timeout
 	}
 
 	// Sign the block using the leader’s private key.
-	block.ProposerSignature = Sign(block, myPrivateKey)
+	block.ProposerSignature, _ = Sign(block.Hash(), *node.PrivKey)
 	// Blast the block to everyone including yourself. This means we'll process
 	// this block in handleBlockFromPeer, where we'll also update our highestQC and
 	// advance to the next view.
