@@ -721,11 +721,20 @@ func validateVote(vote VoteMessage, node *Node, safeblocks *SafeBlockMap) bool {
 
 	return true
 }
-func ComputeVoteStake(votesSeen map[string]VoteMessage, pubKeyToStake map[string]int) int {
+func ComputeStake(messages interface{}, pubKeyToStake map[string]int) int {
 	totalStake := 0
-	for _, vote := range votesSeen {
-		if stake, exists := pubKeyToStake[string(vote.ValidatorPublicKey)]; exists {
-			totalStake += stake
+	switch m := messages.(type) {
+	case map[string]VoteMessage:
+		for _, vote := range m {
+			if stake, exists := pubKeyToStake[string(vote.ValidatorPublicKey)]; exists {
+				totalStake += stake
+			}
+		}
+	case map[string]TimeoutMessage:
+		for _, timeout := range m {
+			if stake, exists := pubKeyToStake[string(timeout.ValidatorPublicKey)]; exists {
+				totalStake += stake
+			}
 		}
 	}
 	return totalStake
@@ -781,7 +790,7 @@ func handleVoteMessageFromPeer(vote *VoteMessage, node *Node, safeblocks *SafeBl
 
 	// Check if we’ve gathered votes from 2/3rds of the validators, weighted by stake.
 
-	voteStake := ComputeVoteStake((*voteseen)[Hash(vote.View, vote.BlockHash)], node.PubKeyToStake)
+	voteStake := ComputeStake((*voteseen)[Hash(vote.View, vote.BlockHash)], node.PubKeyToStake)
 	if voteStake < 2*GetTotalStake(node.PubKeyToStake)/3 {
 		return
 	}
@@ -847,9 +856,30 @@ func validateTimeout(timeout TimeoutMessage, node *Node) bool {
 	return true
 }
 
+func AppendTimeoutMessage(timeoutsSeen *map[[32]byte]map[string]TimeoutMessage, timeout TimeoutMessage) {
+	// Check if the outer key exists in the map
+	innerMap, ok := (*timeoutsSeen)[Hash(timeout.View, timeout.HighQC.BlockHash)]
+	if !ok {
+		// Initialize the inner map if it doesn't exist
+		innerMap = make(map[string]TimeoutMessage)
+		(*timeoutsSeen)[Hash(timeout.View, timeout.HighQC.BlockHash)] = innerMap
+	}
+
+	// Check if the inner key exists in the inner map
+	_, ok = innerMap[string(timeout.ValidatorPublicKey)]
+	if ok {
+		// If the inner key exists, the validator has already sent a timeout message for the given
+		// (view, highQC.blockHash) pair and the new timeout message should be rejected.
+		return
+	}
+
+	// Add the new timeout message to the inner map
+	innerMap[string(timeout.ValidatorPublicKey)] = timeout
+}
+
 // The handleTimeoutMessageFromPeer is called whenever we receive a timeout
 // from a peer.
-func handleTimeoutMessageFromPeer(timeoutMsg TimeoutMessage, node *Node) {
+func handleTimeoutMessageFromPeer(timeoutMsg TimeoutMessage, node *Node, timeoutseen *map[[32]byte]map[string]TimeoutMessage) {
 	// If we're not the leader, ignore all timeout messages.
 	if !node.AmIaLeader(timeoutMsg.View) {
 		return
@@ -864,11 +894,12 @@ func handleTimeoutMessageFromPeer(timeoutMsg TimeoutMessage, node *Node) {
 
 	// If we get here, it means we are the leader so add the timeoutMsg to our
 	// map of timeouts seen.
-	timeoutsSeenMap[timeoutMsg.ValidatorPublicKey] = timeoutMsg
-
+	AppendTimeoutMessage(timeoutseen, timeoutMsg)
 	// Check if we’ve gathered timeouts from 2/3rds of the validators, weighted
 	// by stake.
-	if ComputeTimeoutStake(timeoutsSeenMap) < 2/3*GetTotalStake() {
+	timeoutStake := ComputeStake((*timeoutseen)[Hash(timeoutMsg.View, timeoutMsg.HighQC.View)], node.PubKeyToStake)
+
+	if timeoutStake < 2/3*GetTotalStake(node.PubKeyToStake) {
 		return
 	}
 
@@ -911,49 +942,51 @@ func handleTimeoutMessageFromPeer(timeoutMsg TimeoutMessage, node *Node) {
 
 // This is the node's main message and event handling loop. We continuously loop,
 // incrementing the view with each round.
-func StartConsensus() {
-	// We run an infinite loop, and process each message from our peers as it
-	// comes in. Note that the timeout is also something we might process as
-	// part of this main loop. If you are unfamiliar with the concept of a "select"
-	// statement, we recommend referencing Go's implementation here:
-	// - https://golangdocs.com/select-statement-in-golang
-	for {
-		select {
-		case messageFromPeer := <-networkChannel.WaitForMessage():
-			if messageFromPeer.MessageType() == BlockMessageType {
-				handleBlockFromPeer(messageFromPeer)
-
-			} else if messageFromPeer.MessageType() == VoteMessageType {
-				handleVoteMessageFromPeer(messageFromPeer)
-
-			} else if messageFromPeer.MessageType() == TimeoutMessageType {
-				handleTimeoutMessageFromPeer(messageFromPeer)
-
-			}
-		case <-WaitForTimeout():
-			// WaitForTimeout() is a function that will emit a value
-			// whenever a timeout is triggered, causing us to enter this part
-			// of the code. It can be assumed that calling
-			// ResetTimeout(timeoutValue) will cause WaitForTimeout() to emit
-			// a value after timeoutValue seconds have elapsed (ignoring all
-			// previous calls to ResetTimeout()).
-
-			// Construct the timeout message
-			timeoutMsg := TimeoutMessage{
-				ValidatorPublicKey:          myPublicKey,
-				TimeoutView:                 currentView,
-				HighQC:                      highestQC,
-				PartialTimeoutViewSignature: Sign(Hash(currentView, highestQC.View), myPrivateKey),
-			}
-
-			// Send the timeout message and send it to the next leader .
-			Send(timeoutMsg, computeLeader(currentView+1))
-
-			// We use exponential backoff for timeouts in this reference
-			// implementation.
-			ResetTimeoutAndAdvanceView(2 * timeoutSeconds)
-		case <-WaitForQuitSignal():
-			Exit()
-		}
-	}
-}
+////*
+//func StartConsensus() {
+//	// We run an infinite loop, and process each message from our peers as it
+//	// comes in. Note that the timeout is also something we might process as
+//	// part of this main loop. If you are unfamiliar with the concept of a "select"
+//	// statement, we recommend referencing Go's implementation here:
+//	// - https://golangdocs.com/select-statement-in-golang
+//	for {
+//		select {
+//		case messageFromPeer := <-networkChannel.WaitForMessage():
+//			if messageFromPeer.MessageType() == BlockMessageType {
+//				handleBlockFromPeer(messageFromPeer)
+//
+//			} else if messageFromPeer.MessageType() == VoteMessageType {
+//				handleVoteMessageFromPeer(messageFromPeer)
+//
+//			} else if messageFromPeer.MessageType() == TimeoutMessageType {
+//				handleTimeoutMessageFromPeer(messageFromPeer)
+//
+//			}
+//		case <-WaitForTimeout():
+//			// WaitForTimeout() is a function that will emit a value
+//			// whenever a timeout is triggered, causing us to enter this part
+//			// of the code. It can be assumed that calling
+//			// ResetTimeout(timeoutValue) will cause WaitForTimeout() to emit
+//			// a value after timeoutValue seconds have elapsed (ignoring all
+//			// previous calls to ResetTimeout()).
+//
+//			// Construct the timeout message
+//			timeoutMsg := TimeoutMessage{
+//				ValidatorPublicKey:          myPublicKey,
+//				TimeoutView:                 currentView,
+//				HighQC:                      highestQC,
+//				PartialTimeoutViewSignature: Sign(Hash(currentView, highestQC.View), myPrivateKey),
+//			}
+//
+//			// Send the timeout message and send it to the next leader .
+//			Send(timeoutMsg, computeLeader(currentView+1))
+//
+//			// We use exponential backoff for timeouts in this reference
+//			// implementation.
+//			ResetTimeoutAndAdvanceView(2 * timeoutSeconds)
+//		case <-WaitForQuitSignal():
+//			Exit()
+//		}
+//	}
+//}
+//*/
