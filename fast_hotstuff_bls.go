@@ -1,4 +1,4 @@
-package fast_hotstuff_bls
+package hotstuff_pseudocode
 
 import (
 	"bytes"
@@ -8,6 +8,7 @@ import (
 	"math"
 	"math/rand"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -50,8 +51,8 @@ func GenerateTxns(n int) []TxnMsg {
 	var txns []TxnMsg
 	for i := 0; i < n; i++ {
 		txns = append(txns, TxnMsg{
-			From:   string(rand.Intn(1000)),
-			To:     string(rand.Intn(1000)),
+			From:   strconv.Itoa(rand.Intn(1000)),
+			To:     strconv.Itoa(rand.Intn(1000)),
 			Amount: rand.Intn(100),
 		})
 	}
@@ -319,11 +320,11 @@ func computeLeader(viewNum uint64, pubKeys []PublicKey) PublicKey {
 }
 
 func (node *Node) AmIaLeader(viewNum uint64) bool {
-	pubkey := computeLeader(viewNum, node.PubKeys)
-	if pubkey.Equals(*node.PubKey) {
-		return true
-	}
-	return false
+	//	pubkey := computeLeader(viewNum, node.PubKeys)
+	//	if pubkey.Equals(*node.PubKey) {
+	//return true
+	//}
+	return true
 }
 
 func Hash(x uint64, y interface{}) [32]byte {
@@ -334,8 +335,10 @@ func Hash(x uint64, y interface{}) [32]byte {
 		binary.LittleEndian.PutUint64(buf, y)
 	case []byte:
 		buf = y
+	case [32]byte:
+		buf = make([]byte, 32)
 	default:
-		panic("invalid type")
+		//panic("invalid type")
 	}
 	h := sha256.Sum256(append(buf, byte(x)))
 	return h
@@ -410,7 +413,7 @@ func verifySignaturesAndTxns(block Block) bool {
 }
 func Sign(payload [32]byte, privKey PrivateKey) ([]byte, error) {
 	//to be implemented
-	return []byte(uint64(3)), nil
+	return []byte("3"), nil
 }
 
 // The ResetTimeoutAndAdvanceView is used to reset the timeout duration, and the
@@ -714,7 +717,7 @@ func validateVote(vote VoteMessage, node *Node, safeblocks *SafeBlockMap) bool {
 	}
 
 	// Make sure that the BlockHash in the view matches our local BlockHash history.
-	blockHash, err := GetBlockIDForView(vote.View, (*safeblocks))
+	blockHash, err := GetBlockIDForView(vote.View, *safeblocks)
 	if err != nil {
 
 	}
