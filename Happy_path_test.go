@@ -89,7 +89,7 @@ func TestHandleBlockFromPeer(t *testing.T) {
 		HighestQC: &QuorumCertificate{
 			View:                           0,
 			BlockHash:                      genesisBlock.Hash(),
-			CombinedViewBlockHashSignature: BLSCombinedSignature{CombinedSignature: []byte("a"), ValidatorIDBitmap: []byte("a")},
+			CombinedViewBlockHashSignature: BLSMultiSignature{CombinedSignature: []byte("a"), ValidatorIDBitmap: []byte("a")},
 		},
 		PubKeys:         []PublicKey{{}},
 		PrivKey:         &PrivateKey{},
@@ -101,7 +101,7 @@ func TestHandleBlockFromPeer(t *testing.T) {
 	qc1 := QuorumCertificate{
 		View:                           0,
 		BlockHash:                      genesisBlock.Hash(),
-		CombinedViewBlockHashSignature: BLSCombinedSignature{CombinedSignature: []byte("a"), ValidatorIDBitmap: []byte("a")},
+		CombinedViewBlockHashSignature: BLSMultiSignature{CombinedSignature: []byte("a"), ValidatorIDBitmap: []byte("a")},
 	}
 	block1.SetQC(&qc1)
 
@@ -109,7 +109,7 @@ func TestHandleBlockFromPeer(t *testing.T) {
 	qc2 := QuorumCertificate{
 		View:                           0,
 		BlockHash:                      block1.Hash(),
-		CombinedViewBlockHashSignature: BLSCombinedSignature{CombinedSignature: []byte("a"), ValidatorIDBitmap: []byte("a")},
+		CombinedViewBlockHashSignature: BLSMultiSignature{CombinedSignature: []byte("a"), ValidatorIDBitmap: []byte("a")},
 	}
 	block2.SetQC(&qc2)
 
@@ -117,7 +117,7 @@ func TestHandleBlockFromPeer(t *testing.T) {
 	qc3 := QuorumCertificate{
 		View:                           0,
 		BlockHash:                      block2.Hash(),
-		CombinedViewBlockHashSignature: BLSCombinedSignature{CombinedSignature: []byte("a"), ValidatorIDBitmap: []byte("a")},
+		CombinedViewBlockHashSignature: BLSMultiSignature{CombinedSignature: []byte("a"), ValidatorIDBitmap: []byte("a")},
 	}
 	block3.SetQC(&qc3)
 
