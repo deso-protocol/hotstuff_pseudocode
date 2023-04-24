@@ -625,6 +625,28 @@ func (sbm *SafeBlockMap) Put(block *Block) {
 	sbm.Blocks[block.Hash()] = block
 }
 
+func (cbm *CommittedBlockMap) Put(block *Block) {
+	cbm.Mutex.Lock()
+	defer cbm.Mutex.Unlock()
+	cbm.Block[block.Hash()] = block
+}
+
+// Contains returns true if the given block hash is in the safe block map, and false otherwise.
+func (sbm *SafeBlockMap) Contains(blockHash [32]byte) bool {
+	sbm.Mutex.Lock()
+	defer sbm.Mutex.Unlock()
+	_, ok := sbm.Blocks[blockHash]
+	return ok
+}
+
+// Contains returns true if the given block hash is in the safe block map, and false otherwise.
+func (cbm *CommittedBlockMap) Contains(blockHash [32]byte) bool {
+	cbm.Mutex.Lock()
+	defer cbm.Mutex.Unlock()
+	_, ok := cbm.Block[blockHash]
+	return ok
+}
+
 // The handleBlockFromPeer is called whenever we receive a block from a peer.
 func handleBlockFromPeer(block *Block, node *Node, safeblocks *SafeBlockMap, committedblocks *CommittedBlockMap) {
 	// Make sure that the block contains a valid QC, signature, transactions,
@@ -780,6 +802,10 @@ func GetTotalStake(pubKeyToStake map[string]int) int {
 		totalStake += stake
 	}
 	return totalStake
+}
+
+func (b *Block) SetQC(qc *QuorumCertificate) {
+	b.QC = *qc
 }
 
 // The handleVoteMessageFromPeer is called whenever we receive a vote from a peer.

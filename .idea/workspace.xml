@@ -4,14 +4,9 @@
     <option name="autoReloadType" value="ALL" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="4f16aba9-ec1f-4096-b5d8-e31689d9ce73" name="Changes" comment="Testing vote count">
-      <change afterPath="$PROJECT_DIR$/Happy_path_test.go" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/go.mod" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/go.sum" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/shelf/Uncommitted_changes_before_Update_at_2023-04-13,_8_25_p_m__[Changes]/shelved.patch" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/shelf/Uncommitted_changes_before_Update_at_2023-04-13__8_25_p_m___Changes_.xml" beforeDir="false" />
+    <list default="true" id="4f16aba9-ec1f-4096-b5d8-e31689d9ce73" name="Changes" comment="Testing block handling">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/bls_signature_reference.go" beforeDir="false" afterPath="$PROJECT_DIR$/bls_signature_reference.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Happy_path_test.go" beforeDir="false" afterPath="$PROJECT_DIR$/Happy_path_test.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/fast_hotstuff_bls.go" beforeDir="false" afterPath="$PROJECT_DIR$/fast_hotstuff_bls.go" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -167,7 +162,8 @@
     <MESSAGE value="handleVoteMessageFromPeer" />
     <MESSAGE value="Timeout" />
     <MESSAGE value="Testing vote count" />
-    <option name="LAST_COMMIT_MESSAGE" value="Testing vote count" />
+    <MESSAGE value="Testing block handling" />
+    <option name="LAST_COMMIT_MESSAGE" value="Testing block handling" />
   </component>
   <component name="VgoProject">
     <settings-migrated>true</settings-migrated>
