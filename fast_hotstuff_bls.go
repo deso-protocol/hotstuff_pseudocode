@@ -19,27 +19,26 @@ import (
 // A BLSPartialSignature is a signature typically made by a validator on a
 // particular payload that can be combined with other signatures from other
 // validators for the same or different payload. For example, if a hundred
-// validators were to sign Hash(block1.ToBytes()), then all of those signatures
-// could be combined using BLS into a single BLSMultiSignature. Using
-// a multi-signature scheme, we're also able to combine signatures on
-// different messages into one combined signature.
+// validators were to sign Hash(123), and another hundred were to sign Hash(456),
+// all of those signatures could be combined using BLS multi-signature scheme
+// into a single BLSMultiSignature.
 //
 // Using BLS signatures is preferred because it's much more space-efficient
 // and computationally efficient than using raw signatures. In addition to
 // condensing n signatures down to a single O(1) value, verifying a
-// combined BLS signature can be done with only one expensive signature
+//  BLS multi signature can be done with only one expensive signature
 // check, as opposed to checking n signatures individually.
 type BLSPartialSignature []byte
 
 // A BLSMultiSignature is a multi-signature that is the result of combining multiple
-// BLSPartialSignatures on the same payload. In order to verify a BLSMultiSignature,
-// a validator needs the public keys of all of the validators whose signatures were
-// combined. This is why a secondary field called ValidatorIDBitmap is included
+// BLSPartialSignatures. In order to verify a BLSMultiSignature, a validator needs
+// the public keys of all of the validators whose signatures were combined.
+// This is why a secondary field called ValidatorIDBitmap is included
 // in this struct. It allows anyone who receives a BLSMultiSignature to check it
 // by first looking up the public keys of all of the validators whose signatures were
 // combined, and then verifying the BLSMultiSignature using those public keys.
 // Along with the BLSMultiSignature, we also need to store the list of messages
-// the were signed by the validators to make this multi-signature. We store this
+// signed by validators that were used to make this multi-signature. We store this
 // outside the BLSMultiSignature struct, in the AggregateQC.
 //
 // Importantly, while ValidatorIDBitmap technically requires O(n) space, where n is
