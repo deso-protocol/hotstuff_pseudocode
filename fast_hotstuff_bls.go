@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"reflect"
 	"sort"
 	"strconv"
 	"sync"
@@ -335,8 +336,9 @@ func Hash(x uint64, y interface{}) [32]byte {
 		binary.LittleEndian.PutUint64(buf, y)
 	case []byte:
 		buf = y
-	case [32]byte:
-		buf = make([]byte, 32)
+	//case [32]byte:
+	//	buf = make([]byte, 32)
+
 	default:
 		//panic("invalid type")
 	}
@@ -384,7 +386,10 @@ func (pk PublicKey) Equals(other PublicKey) bool {
 // current view. We will make sure this map only stores votes for the currentView.
 // Rev: We don't know if the current view of the node is the current view of majority of the network.
 // It is map of the hash(block.view, block.hash) to map string (vote.voter)
-type votesSeen map[[32]byte]map[string]VoteMessage
+type votesSeen struct {
+	Mutex sync.Mutex
+	Vote  map[[32]byte]map[string]VoteMessage
+}
 
 // The timeoutsSeen variable is similar to votesSeen. It stores the timeout messages
 // seen by the leader in the current view. We also make sure this map only stores
@@ -392,10 +397,9 @@ type votesSeen map[[32]byte]map[string]VoteMessage
 
 // Rev: We don't know if the current view of the node is the current view of majority of the network.
 // It is map of the hash(block.view, block.hash) to map string (timeoutMessage.ValidatorPublickey)
-type TimeoutsSeenMap map[[32]byte]map[string][]TimeoutMessage
-
-func (m TimeoutsSeenMap) Reset(key [32]byte) {
-	delete(m, key)
+type TimeoutsSeenMap struct {
+	Timeout map[[32]byte]map[string]TimeoutMessage
+	Mutex   sync.Mutex
 }
 
 // Validates supermajority has voted in QC
@@ -580,7 +584,7 @@ func validateQuorumCertificate(qc QuorumCertificate) bool {
 }
 
 // todo: This function needs to be revised
-func validateTimeoutProof(aggregateQC AggregateQC, pubkeys []PublicKey) bool {
+func validateTimeoutProof(aggregateQC AggregateQC) bool {
 	// Make sure the lists in the AggregateQC have equal lengths
 	if len(aggregateQC.ValidatorTimeoutHighQCViews) != len(aggregateQC.ValidatorCombinedTimeoutSignatures.ValidatorIDBitmap) {
 		return false
@@ -631,20 +635,30 @@ func (cbm *CommittedBlockMap) Put(block *Block) {
 	cbm.Block[block.Hash()] = block
 }
 
-// Contains returns true if the given block hash is in the safe block map, and false otherwise.
-func (sbm *SafeBlockMap) Contains(blockHash [32]byte) bool {
-	sbm.Mutex.Lock()
-	defer sbm.Mutex.Unlock()
-	_, ok := sbm.Blocks[blockHash]
-	return ok
-}
+// Contains returns true if the given key is in the  map, and false otherwise.
 
-// Contains returns true if the given block hash is in the safe block map, and false otherwise.
-func (cbm *CommittedBlockMap) Contains(blockHash [32]byte) bool {
-	cbm.Mutex.Lock()
-	defer cbm.Mutex.Unlock()
-	_, ok := cbm.Block[blockHash]
-	return ok
+func Contains(m interface{}, key interface{}, mutex *sync.Mutex) bool {
+	v := reflect.ValueOf(m)
+	if v.Kind() != reflect.Map {
+		panic("m is not a map")
+	}
+	if v.IsNil() {
+		panic("m is nil")
+	}
+	k := reflect.ValueOf(key)
+	if k.Type() != v.Type().Key() {
+		panic("key type does not match map key type")
+	}
+	elemType := v.Type().Elem()
+	if elemType.Kind() == reflect.Ptr {
+		elemType = elemType.Elem()
+	}
+	zero := reflect.Zero(elemType)
+
+	mutex.Lock()
+	defer mutex.Unlock()
+
+	return !reflect.DeepEqual(v.MapIndex(k).Interface(), zero.Interface())
 }
 
 // The handleBlockFromPeer is called whenever we receive a block from a peer.
@@ -657,7 +671,6 @@ func handleBlockFromPeer(block *Block, node *Node, safeblocks *SafeBlockMap, com
 
 	// The safeVote variable will tell us if we can vote on this block.
 	safeVote := false
-
 	// If the block doesn’t contain an AggregateQC, then that indicates that we
 	// did NOT timeout in the previous view, which means we should just check that
 	// the QC corresponds to the previous view.
@@ -673,7 +686,7 @@ func handleBlockFromPeer(block *Block, node *Node, safeblocks *SafeBlockMap, com
 		// the block accordingly.
 
 		// First we make sure the block contains a valid AggregateQC.
-		validateTimeoutProof(block.AggregateQC, node.PubKeys)
+		validateTimeoutProof(block.AggregateQC)
 		// We find the QC with the highest view among the QCs contained in the
 		// AggregateQC.
 		highestTimeoutQC := block.AggregateQC.ValidatorTimeoutHighQC
@@ -894,13 +907,14 @@ func validateTimeout(timeout TimeoutMessage, node *Node) bool {
 	return true
 }
 
-func AppendTimeoutMessage(timeoutsSeen *map[[32]byte]map[string]TimeoutMessage, timeout TimeoutMessage) {
+func AppendTimeoutMessage(timeoutsSeen *TimeoutsSeenMap, timeout TimeoutMessage) {
+
 	// Check if the outer key exists in the map
-	innerMap, ok := (*timeoutsSeen)[Hash(timeout.View, timeout.HighQC.BlockHash)]
+	innerMap, ok := (*timeoutsSeen).Timeout[Hash(timeout.View, nil)]
 	if !ok {
 		// Initialize the inner map if it doesn't exist
 		innerMap = make(map[string]TimeoutMessage)
-		(*timeoutsSeen)[Hash(timeout.View, timeout.HighQC.BlockHash)] = innerMap
+		(*timeoutsSeen).Timeout[Hash(timeout.View, nil)] = innerMap
 	}
 
 	// Check if the inner key exists in the inner map
@@ -941,7 +955,9 @@ func GetTimeouthighQcViews(timeoutSeen map[string]TimeoutMessage) []uint64 {
 
 // The handleTimeoutMessageFromPeer is called whenever we receive a timeout
 // from a peer.
-func handleTimeoutMessageFromPeer(timeoutMsg TimeoutMessage, node *Node, timeoutseen *map[[32]byte]map[string]TimeoutMessage) {
+func F(timeoutMsg TimeoutMessage, node *Node, timeoutseen TimeoutsSeenMap, mu *sync.Mutex) {
+	mu.Lock()
+	defer mu.Unlock()
 	// If we're not the leader, ignore all timeout messages.
 	if !node.AmIaLeader(timeoutMsg.View) {
 		return
@@ -956,10 +972,10 @@ func handleTimeoutMessageFromPeer(timeoutMsg TimeoutMessage, node *Node, timeout
 
 	// If we get here, it means we are the leader so add the timeoutMsg to our
 	// map of timeouts seen.
-	AppendTimeoutMessage(timeoutseen, timeoutMsg)
+	AppendTimeoutMessage(&timeoutseen, timeoutMsg)
 	// Check if we’ve gathered timeouts from 2/3rds of the validators, weighted
 	// by stake.
-	timeoutStake := ComputeStake((*timeoutseen)[Hash(timeoutMsg.View, timeoutMsg.HighQC.View)], node.PubKeyToStake)
+	timeoutStake := ComputeStake((timeoutseen).Timeout[Hash(timeoutMsg.View, timeoutMsg.HighQC.View)], node.PubKeyToStake)
 
 	if timeoutStake < 2/3*GetTotalStake(node.PubKeyToStake) {
 		return
@@ -973,8 +989,8 @@ func handleTimeoutMessageFromPeer(timeoutMsg TimeoutMessage, node *Node, timeout
 	// validatorHighQCs list of all the QCs sent to use by the validators, along
 	// with their signatures. We also find the QC with the highest view among the
 	// validatorHighQCs.
-	highQC := GetHighestViewHighQC((*timeoutseen)[Hash(timeoutMsg.View, timeoutMsg.HighQC.View)])
-	views := GetTimeouthighQcViews((*timeoutseen)[Hash(timeoutMsg.View, timeoutMsg.HighQC.View)])
+	highQC := GetHighestViewHighQC((timeoutseen).Timeout[Hash(timeoutMsg.View, nil)])
+	views := GetTimeouthighQcViews((timeoutseen).Timeout[Hash(timeoutMsg.View, nil)])
 	//highQC, timeoutHighQCViews, timeoutHighQCCombinedSigs := FormatTimeoutQCs(timeoutsSeenMap)
 	// Construct the AggregateQC for this view.
 	aggregateQC := AggregateQC{

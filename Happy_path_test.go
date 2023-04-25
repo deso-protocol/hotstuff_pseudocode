@@ -127,15 +127,16 @@ func TestHandleBlockFromPeer(t *testing.T) {
 	handleBlockFromPeer(&block3, &node, safeBlocks, committedBlocks)
 
 	// Verify that block1 is in the committed block map
-	if !committedBlocks.Contains(block1.Hash()) {
+	//if !committedBlocks.Contains(block1.Hash()) {
+	if !Contains(committedBlocks.Block, block1.Hash(), &committedBlocks.Mutex) {
 		t.Errorf("Block 1 not found in committed block map")
 	}
 
 	// Verify that block2 and block3 are in the safe block map
-	if !safeBlocks.Contains(block2.Hash()) {
+	if !Contains(safeBlocks.Blocks, block2.Hash(), &committedBlocks.Mutex) {
 		t.Errorf("Block 2 not found in safe block map")
 	}
-	if !safeBlocks.Contains(block3.Hash()) {
+	if !Contains(safeBlocks.Blocks, block3.Hash(), &committedBlocks.Mutex) {
 		t.Errorf("Block 3 not found in safe block map")
 	}
 }
