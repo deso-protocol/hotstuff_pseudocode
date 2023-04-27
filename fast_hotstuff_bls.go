@@ -3,7 +3,7 @@ package hotstuff_pseudocode
 import (
 	"bytes"
 	"crypto/sha256"
-	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"math"
 	"math/rand"
@@ -255,9 +255,6 @@ type AggregateQC struct {
 
 type Block struct {
 
-	// The hash of the previous block that this block extends.
-	PreviousBlockHash [32]byte
-
 	// The public key of the leader who is proposing this block.
 	ProposerPublicKey PublicKey
 
@@ -285,10 +282,6 @@ type Block struct {
 func (node Node) GetMyKeys(mypubkey PublicKey, myprivkey PrivateKey) {
 	node.PrivKey = &myprivkey
 	node.PubKey = &mypubkey
-}
-
-func (Block) Hash() (hash [32]byte) {
-	return hash
 }
 
 func VerifySignature(hash [32]byte, publicKey PublicKey, signature []byte) bool {
@@ -328,22 +321,25 @@ func (node *Node) AmIaLeader(viewNum uint64) bool {
 	return true
 }
 
-func Hash(x uint64, y interface{}) [32]byte {
-	var buf []byte
-	switch y := y.(type) {
+func Hash(viewNumber uint64, data interface{}) [32]byte {
+	var dataBytes []byte
+	switch data.(type) {
+	case []TxnMsg:
+		txnBytes, err := json.Marshal(data)
+		if err != nil {
+			panic(err)
+		}
+		dataBytes = txnBytes
 	case uint64:
-		buf = make([]byte, 8)
-		binary.LittleEndian.PutUint64(buf, y)
-	case []byte:
-		buf = y
-	//case [32]byte:
-	//	buf = make([]byte, 32)
-
+		viewBytes := []byte(fmt.Sprintf("%d", data))
+		dataBytes = viewBytes
 	default:
-		//panic("invalid type")
+		panic("invalid data type")
 	}
-	h := sha256.Sum256(append(buf, byte(x)))
-	return h
+	viewBytes := []byte(fmt.Sprintf("%d", viewNumber))
+	viewHash := sha256.Sum256(viewBytes)
+	combinedHash := sha256.Sum256(append(dataBytes, viewHash[:]...))
+	return combinedHash
 }
 
 func (pk PublicKey) Equals(other PublicKey) bool {
@@ -464,7 +460,7 @@ func Send(msg VoteMessage, leader PublicKey) {
 func GetBlockIDForView(view uint64, blockMap SafeBlockMap) ([32]byte, error) {
 	for _, block := range blockMap.Blocks {
 		if block.View == view {
-			return block.Hash(), nil
+			return Hash(block.View, block.Txns), nil
 		}
 	}
 	return [32]byte{}, fmt.Errorf("block not found for view %d", view)
@@ -541,7 +537,7 @@ func sanityCheckBlock(block Block, node *Node) bool {
 	}
 
 	// Make sure the leader signed the block.
-	if !VerifySignature(block.Hash(), block.ProposerPublicKey, block.ProposerSignature) {
+	if !VerifySignature(Hash(block.View, block.Txns), block.ProposerPublicKey, block.ProposerSignature) {
 		return false
 	}
 
@@ -626,13 +622,13 @@ func validateTimeoutProof(aggregateQC AggregateQC) bool {
 func (sbm *SafeBlockMap) Put(block *Block) {
 	sbm.Mutex.Lock()
 	defer sbm.Mutex.Unlock()
-	sbm.Blocks[block.Hash()] = block
+	sbm.Blocks[Hash(block.View, block.Txns)] = block
 }
 
 func (cbm *CommittedBlockMap) Put(block *Block) {
 	cbm.Mutex.Lock()
 	defer cbm.Mutex.Unlock()
-	cbm.Block[block.Hash()] = block
+	cbm.Block[Hash(block.View, block.Txns)] = block
 }
 
 // Contains returns true if the given key is in the  map, and false otherwise.
@@ -704,13 +700,13 @@ func handleBlockFromPeer(block *Block, node *Node, safeblocks *SafeBlockMap, com
 	if safeVote {
 		// Construct the vote message. The vote will contain the validator's
 		// signature on the <view, blockHash> pair.
-		payload := Hash(block.View, block.Hash())
+		payload := Hash(block.View, block.Txns)
 		blockHashSignature, _ := Sign(payload, *node.PrivKey)
 
 		voteMsg := VoteMessage{
 			ValidatorPublicKey:            *node.PubKey,
 			View:                          block.View,
-			BlockHash:                     block.Hash(),
+			BlockHash:                     Hash(block.View, block.Txns),
 			PartialViewBlockHashSignature: blockHashSignature,
 		}
 		// Send the vote directly to the next leader.
@@ -720,6 +716,7 @@ func handleBlockFromPeer(block *Block, node *Node, safeblocks *SafeBlockMap, com
 		node.Last_voted_view = uint64(math.Max(float64(node.Last_voted_view), float64(node.CurView)))
 
 		// Add the block to the safeblocks struct.
+		fmt.Println("putting block, ", *block)
 		safeblocks.Put(block)
 	}
 
@@ -859,7 +856,6 @@ func handleVoteMessageFromPeer(vote *VoteMessage, node *Node, safeblocks *SafeBl
 
 	// Construct the block
 	block := Block{
-		PreviousBlockHash: qc.BlockHash,
 		ProposerPublicKey: *node.PubKey,
 		Txns:              GenerateTxns(10),
 		View:              node.CurView,
@@ -873,7 +869,7 @@ func handleVoteMessageFromPeer(vote *VoteMessage, node *Node, safeblocks *SafeBl
 	}
 
 	// Sign the block using the leader’s private key.
-	block.ProposerSignature, _ = Sign(block.Hash(), *node.PrivKey)
+	block.ProposerSignature, _ = Sign(Hash(block.View, block.Txns), *node.PrivKey)
 	// Blast the block to everyone including yourself. This means we'll process
 	// this block in handleBlockFromPeer, where we'll also update our highestQC and
 	// advance to the next view. As such, there is no reason to
@@ -1002,7 +998,6 @@ func F(timeoutMsg TimeoutMessage, node *Node, timeoutseen TimeoutsSeenMap, mu *s
 
 	// Construct the block and include the aggregateQC.
 	block := Block{
-		PreviousBlockHash: highQC.BlockHash,
 		ProposerPublicKey: *node.PubKey,
 		Txns:              GenerateTxns(10),
 		View:              node.CurView,
@@ -1013,7 +1008,7 @@ func F(timeoutMsg TimeoutMessage, node *Node, timeoutseen TimeoutsSeenMap, mu *s
 	}
 
 	// Sign the block using the leader’s private key.
-	block.ProposerSignature, _ = Sign(block.Hash(), *node.PrivKey)
+	block.ProposerSignature, _ = Sign(Hash(block.View, block.Txns), *node.PrivKey)
 	// Blast the block to everyone including yourself. This means we'll process
 	// this block in handleBlockFromPeer, where we'll also update our highestQC and
 	// advance to the next view.
