@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"math/rand"
@@ -633,17 +634,17 @@ func (cbm *CommittedBlockMap) Put(block *Block) {
 
 // Contains returns true if the given key is in the  map, and false otherwise.
 
-func Contains(m interface{}, key interface{}, mutex *sync.Mutex) bool {
+func Contains(m interface{}, key interface{}, mutex *sync.Mutex) (bool, error) {
 	v := reflect.ValueOf(m)
 	if v.Kind() != reflect.Map {
-		panic("m is not a map")
+		return false, errors.New("m is not a map")
 	}
 	if v.IsNil() {
-		panic("m is nil")
+		return false, errors.New("m is nil")
 	}
 	k := reflect.ValueOf(key)
 	if k.Type() != v.Type().Key() {
-		panic("key type does not match map key type")
+		return false, errors.New("key type does not match map key type")
 	}
 	elemType := v.Type().Elem()
 	if elemType.Kind() == reflect.Ptr {
@@ -654,7 +655,10 @@ func Contains(m interface{}, key interface{}, mutex *sync.Mutex) bool {
 	mutex.Lock()
 	defer mutex.Unlock()
 
-	return !reflect.DeepEqual(v.MapIndex(k).Interface(), zero.Interface())
+	if !v.MapIndex(k).IsValid() {
+		return false, nil
+	}
+	return !reflect.DeepEqual(v.MapIndex(k).Interface(), zero.Interface()), nil
 }
 
 // The handleBlockFromPeer is called whenever we receive a block from a peer.
@@ -878,7 +882,7 @@ func handleVoteMessageFromPeer(vote *VoteMessage, node *Node, safeblocks *SafeBl
 }
 
 func broadcast(block Block) {
-
+	//todo: implementing broadcast
 }
 
 // /Needs to be redone.

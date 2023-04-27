@@ -54,7 +54,7 @@ func TestHandleVoteMessageFromPeer(t *testing.T) {
 		},
 	}
 
-	// Call handleVoteMessageFromPeer with the mock arguments
+	// Call handleVoteMessageFromPeer
 	handleVoteMessageFromPeer(vote, node, safeBlocks, voteseen)
 
 	// Assert that the vote was added to the voteseen map
@@ -135,15 +135,20 @@ func TestHandleBlockFromPeer(t *testing.T) {
 
 	// Verify that block1 is in the committed block map
 	//if !committedBlocks.Contains(block1.Hash()) {
-	if !Contains(committedBlocks.Block, Hash(1, block1.Txns), &committedBlocks.Mutex) {
+	if ok, err := Contains(committedBlocks.Block, Hash(1, block1.Txns), &committedBlocks.Mutex); err != nil || !ok {
 		t.Errorf("Block 1 not found in committed block map")
 	}
 
 	// Verify that block2 and block3 are in the safe block map
-	if !Contains(safeBlocks.Blocks, Hash(2, block2.Txns), &committedBlocks.Mutex) {
+	if ok, err := Contains(safeBlocks.Blocks, Hash(2, block2.Txns), &safeBlocks.Mutex); err != nil || !ok {
 		t.Errorf("Block 2 not found in safe block map")
 	}
-	if !Contains(safeBlocks.Blocks, Hash(3, block3.Txns), &committedBlocks.Mutex) {
+
+	if ok, err := Contains(safeBlocks.Blocks, Hash(3, block3.Txns), &safeBlocks.Mutex); err != nil || !ok {
 		t.Errorf("Block 3 not found in safe block map")
+	}
+
+	if ok, err := Contains(committedBlocks.Block, Hash(3, block3.Txns), &committedBlocks.Mutex); err == nil || ok {
+		t.Errorf("Block 3 is found in Committed block map. It shouldn't have been saved")
 	}
 }
