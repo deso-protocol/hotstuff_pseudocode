@@ -148,7 +148,7 @@ func TestHandleBlockFromPeer(t *testing.T) {
 		t.Errorf("Block 3 not found in safe block map")
 	}
 
-	if ok, err := Contains(committedBlocks.Block, Hash(3, block3.Txns), &committedBlocks.Mutex); err == nil || ok {
+	if ok, _ := Contains(committedBlocks.Block, Hash(3, block3.Txns), &committedBlocks.Mutex); ok {
 		t.Errorf("Block 3 is found in Committed block map. It shouldn't have been saved")
 	}
 }

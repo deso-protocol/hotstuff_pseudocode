@@ -499,6 +499,7 @@ func (node *Node) commitChainFromGrandParent(block *Block, safeblocks *SafeBlock
 
 		committedBlocks.Block[blockHash] = block
 		node.LatestCommittedView = view
+		fmt.Println("adding blocks to committed block map, ", block)
 	}
 }
 
