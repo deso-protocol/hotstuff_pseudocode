@@ -11,7 +11,6 @@ import (
 	"reflect"
 	"sort"
 	"strconv"
-	"sync"
 	"time"
 )
 
@@ -140,11 +139,9 @@ type QuorumCertificate struct {
 // Set of SafeBlocks and CommittedBlocks
 type SafeBlockMap struct {
 	Blocks map[[32]byte]*Block
-	Mutex  sync.Mutex
 }
 type CommittedBlockMap struct {
 	Block map[[32]byte]*Block
-	Mutex sync.Mutex
 }
 
 func (aqc AggregateQC) isEmpty() bool {
@@ -384,8 +381,7 @@ func (pk PublicKey) Equals(other PublicKey) bool {
 // Rev: We don't know if the current view of the node is the current view of majority of the network.
 // It is map of the hash(block.view, block.hash) to map string (vote.voter)
 type votesSeen struct {
-	Mutex sync.Mutex
-	Vote  map[[32]byte]map[string]VoteMessage
+	Vote map[[32]byte]map[string]VoteMessage
 }
 
 // The timeoutsSeen variable is similar to votesSeen. It stores the timeout messages
@@ -396,7 +392,6 @@ type votesSeen struct {
 // It is map of the hash(block.view, block.hash) to map string (timeoutMessage.ValidatorPublickey)
 type TimeoutsSeenMap struct {
 	Timeout map[[32]byte]map[string]TimeoutMessage
-	Mutex   sync.Mutex
 }
 
 // Validates supermajority has voted in QC
@@ -622,20 +617,16 @@ func validateTimeoutProof(aggregateQC AggregateQC) bool {
 }
 
 func (sbm *SafeBlockMap) Put(block *Block) {
-	sbm.Mutex.Lock()
-	defer sbm.Mutex.Unlock()
 	sbm.Blocks[Hash(block.View, block.Txns)] = block
 }
 
 func (cbm *CommittedBlockMap) Put(block *Block) {
-	cbm.Mutex.Lock()
-	defer cbm.Mutex.Unlock()
 	cbm.Block[Hash(block.View, block.Txns)] = block
 }
 
 // Contains returns true if the given key is in the  map, and false otherwise.
 
-func Contains(m interface{}, key interface{}, mutex *sync.Mutex) (bool, error) {
+func Contains(m interface{}, key interface{}) (bool, error) {
 	v := reflect.ValueOf(m)
 	if v.Kind() != reflect.Map {
 		return false, errors.New("m is not a map")
@@ -652,9 +643,6 @@ func Contains(m interface{}, key interface{}, mutex *sync.Mutex) (bool, error) {
 		elemType = elemType.Elem()
 	}
 	zero := reflect.Zero(elemType)
-
-	mutex.Lock()
-	defer mutex.Unlock()
 
 	if !v.MapIndex(k).IsValid() {
 		return false, nil
@@ -956,9 +944,8 @@ func GetTimeouthighQcViews(timeoutSeen map[string]TimeoutMessage) []uint64 {
 
 // The handleTimeoutMessageFromPeer is called whenever we receive a timeout
 // from a peer.
-func F(timeoutMsg TimeoutMessage, node *Node, timeoutseen TimeoutsSeenMap, mu *sync.Mutex) {
-	mu.Lock()
-	defer mu.Unlock()
+func F(timeoutMsg TimeoutMessage, node *Node, timeoutseen TimeoutsSeenMap) {
+
 	// If we're not the leader, ignore all timeout messages.
 	if !node.AmIaLeader(timeoutMsg.View) {
 		return

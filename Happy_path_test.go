@@ -1,21 +1,18 @@
 package hotstuff_pseudocode
 
 import (
-	"sync"
 	"testing"
 )
 
 func NewSafeBlockMap() *SafeBlockMap {
 	return &SafeBlockMap{
 		Blocks: make(map[[32]byte]*Block),
-		Mutex:  sync.Mutex{},
 	}
 }
 
 func NewCommittedBlock() *CommittedBlockMap {
 	return &CommittedBlockMap{
 		Block: make(map[[32]byte]*Block),
-		Mutex: sync.Mutex{},
 	}
 }
 func TestHandleVoteMessageFromPeer(t *testing.T) {
@@ -135,20 +132,20 @@ func TestHandleBlockFromPeer(t *testing.T) {
 
 	// Verify that block1 is in the committed block map
 	//if !committedBlocks.Contains(block1.Hash()) {
-	if ok, err := Contains(committedBlocks.Block, Hash(1, block1.Txns), &committedBlocks.Mutex); err != nil || !ok {
+	if ok, err := Contains(committedBlocks.Block, Hash(1, block1.Txns)); err != nil || !ok {
 		t.Errorf("Block 1 not found in committed block map")
 	}
 
 	// Verify that block2 and block3 are in the safe block map
-	if ok, err := Contains(safeBlocks.Blocks, Hash(2, block2.Txns), &safeBlocks.Mutex); err != nil || !ok {
+	if ok, err := Contains(safeBlocks.Blocks, Hash(2, block2.Txns)); err != nil || !ok {
 		t.Errorf("Block 2 not found in safe block map")
 	}
 
-	if ok, err := Contains(safeBlocks.Blocks, Hash(3, block3.Txns), &safeBlocks.Mutex); err != nil || !ok {
+	if ok, err := Contains(safeBlocks.Blocks, Hash(3, block3.Txns)); err != nil || !ok {
 		t.Errorf("Block 3 not found in safe block map")
 	}
 
-	if ok, _ := Contains(committedBlocks.Block, Hash(3, block3.Txns), &committedBlocks.Mutex); ok {
+	if ok, _ := Contains(committedBlocks.Block, Hash(3, block3.Txns)); ok {
 		t.Errorf("Block 3 is found in Committed block map. It shouldn't have been saved")
 	}
 }
