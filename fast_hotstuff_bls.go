@@ -75,7 +75,7 @@ type Node struct {
 //	Importantly, while ValidatorIDBitmap technically requires O(n) space, where n is
 //
 // the number of validators, it can be compressed significantly using a bitmap that
-// only stores the indices of thevalidators whose signatures were combined. For
+// only stores the indices of the validators whose signatures were combined. For
 // example, because all validators are known at all times, a convention can be used
 // whereby validators are sorted by their public keys, and then the ValidatorIDBitmap
 // is simply a bitmap that stores the indices of the validators whose signatures were
@@ -147,7 +147,6 @@ type CommittedBlockMap struct {
 func (aqc AggregateQC) isEmpty() bool {
 	if aqc.View == 0 && aqc.ValidatorCombinedTimeoutSignatures.CombinedSignature == nil {
 		return true
-
 	}
 	return false
 }
@@ -294,8 +293,12 @@ func (node *Node) ResetTimeout() {
 }
 
 // Compute the leader node for the given view number and list of public keys
+//
+// Rev(nader): I think this function needs to do a weighted random sample by stake rather
+// than sampling uniformly from leaders, but we can fix this later. Not a problem.
 func computeLeader(viewNum uint64, pubKeys []PublicKey) PublicKey {
 	// Compute the hash of the view number as a byte slice
+	// Rev(nader): We'll change this to sha256.Sum256(EncodeUint64(viewNum))
 	viewHash := sha256.Sum256([]byte{byte(viewNum), byte(viewNum >> 8), byte(viewNum >> 16), byte(viewNum >> 24),
 		byte(viewNum >> 32), byte(viewNum >> 40), byte(viewNum >> 48), byte(viewNum >> 56)})
 
@@ -305,12 +308,14 @@ func computeLeader(viewNum uint64, pubKeys []PublicKey) PublicKey {
 	})
 
 	// Compute the index of the leader node as the least significant 8 bits of the hash
+	// Rev(nader): This should use an on-chain randomness stub function
 	idx := int(viewHash[31]) % len(pubKeys)
 
 	// Return the public key of the leader node
 	return pubKeys[idx]
 }
 
+// Rev(nader): Improve function name
 func (node *Node) AmIaLeader(viewNum uint64) bool {
 	//	pubkey := computeLeader(viewNum, node.PubKeys)
 	//	if pubkey.Equals(*node.PubKey) {
@@ -319,6 +324,12 @@ func (node *Node) AmIaLeader(viewNum uint64) bool {
 	return true
 }
 
+// Rev(nader): Nitpick: This function currently computes Hash(view, txns.ToBytes) but
+// I think what we really want is:
+// blockHash := Hash(txns.ToBytes)
+// return Hash(view, blockHash)
+// If we don't do this, then validating the hash requires running through
+// all the txns every time because they're included directly in the combinedHash.
 func Hash(viewNumber uint64, data interface{}) [32]byte {
 	var dataBytes []byte
 	switch data.(type) {
@@ -344,6 +355,7 @@ func (pk PublicKey) Equals(other PublicKey) bool {
 	return bytes.Equal(pk, other)
 }
 
+// Rev(nader): A lot of erroneous comments below. Not a big deal. But maybe delete them?
 // TimoutDuration This function returns the duration. It should be noted that duration can be calculated as
 // the function of number of failures.
 
@@ -356,6 +368,7 @@ func (pk PublicKey) Equals(other PublicKey) bool {
 // for each consecutive timeout the node experiences, which allows for other nodes
 // to catch up in the event of a network disruption.
 
+// Rev(nader): acknowledged
 // I think this is too much detail for spec. You can decide on how to do it during implementation.
 //var timeoutSeconds = GetInitialTimeout()
 
@@ -380,6 +393,7 @@ func (pk PublicKey) Equals(other PublicKey) bool {
 // current view. We will make sure this map only stores votes for the currentView.
 // Rev: We don't know if the current view of the node is the current view of majority of the network.
 // It is map of the hash(block.view, block.hash) to map string (vote.voter)
+// Rev(nader): Makes sense good catch
 type votesSeen struct {
 	Vote map[[32]byte]map[string]VoteMessage
 }
@@ -390,6 +404,7 @@ type votesSeen struct {
 
 // Rev: We don't know if the current view of the node is the current view of majority of the network.
 // It is map of the hash(block.view, block.hash) to map string (timeoutMessage.ValidatorPublickey)
+// Rev(nader): Makes sense good catch
 type TimeoutsSeenMap struct {
 	Timeout map[[32]byte]map[string]TimeoutMessage
 }
@@ -423,11 +438,15 @@ func Sign(payload [32]byte, privKey PrivateKey) ([]byte, error) {
 //	TimeoutsSeenMap.Reset(certificate.View) can be called later whenever needed.
 
 func (node Node) AdvanceView_qc(certificate QuorumCertificate) {
+	// Rev(nader): Should we be incrementing on the object passed in?
+	// I think what you want is like node.CurView = certificate.View + 1 ?
 	certificate.View += 1
 	node.ResetTimeout()
 }
 
 func (node Node) AdvanceView_Aggqc(agqc AggregateQC) {
+	// Rev(nader): Should we be incrementing on the object passed in?
+	// I think what you want is like node.CurView = certificate.View + 1 ?
 	agqc.View += 1
 	node.ResetTimeout()
 }
@@ -462,7 +481,9 @@ func GetBlockIDForView(view uint64, blockMap SafeBlockMap) ([32]byte, error) {
 	return [32]byte{}, fmt.Errorf("block not found for view %d", view)
 }
 
-func (node *Node) commitChainFromGrandParent(block *Block, safeblocks *SafeBlockMap, committedBlocks *CommittedBlockMap) {
+func (node *Node) commitChainFromGrandParent(
+	block *Block, safeblocks *SafeBlockMap, committedBlocks *CommittedBlockMap) {
+
 	parent := safeblocks.Blocks[block.QC.BlockHash]
 	if parent == nil {
 		return
@@ -480,11 +501,15 @@ func (node *Node) commitChainFromGrandParent(block *Block, safeblocks *SafeBlock
 	for view := node.LatestCommittedView + 1; view <= grandParent.View; view++ {
 		blockHash, err := GetBlockIDForView(view, *safeblocks)
 		if err != nil {
+			// Rev(nader): In this case we're missing a block in between our latest
+			// committed view and the grandparent we're trying to commit. I guess
+			// in this case we should try to fetch it? A bit of complexity here.
 			return
 		}
 
 		block, ok := safeblocks.Blocks[blockHash]
 		if !ok {
+			// Rev(nader): I think this should never happen so we're good.
 			break
 		}
 
@@ -569,6 +594,7 @@ func validateQuorumCertificate(qc QuorumCertificate) bool {
 	// Make sure that the BlockHash in the qc matches our local BlockHash history.
 	//Rev: It is not possible to have a valid quorum certificate and different blockchain history
 	// Hence, this check is not necessary.
+	// Rev(nader): acknowledged.
 	//if GetBlockHashForView(qc.View) != qc.BlockHash {
 	//	return false
 	//	}
@@ -595,6 +621,7 @@ func validateTimeoutProof(aggregateQC AggregateQC) bool {
 
 	// Rev: Don't need to iterate over all the signatures. Just verify the highQC and the
 	// aggregated signature of the aggregatedQC.
+	// Rev(nader): acknowledged.
 	highestQCView := uint64(0)
 
 	//for ii := 0; ii < len(aggregateQC.ValidatorTimeoutHighQCViews); ii++ {
@@ -668,6 +695,7 @@ func handleBlockFromPeer(block *Block, node *Node, safeblocks *SafeBlockMap, com
 		// block. This means that the parent and child blocks have consecutive
 		// views. We use the current block’s QC to find the view of the parent.
 		safeVote = block.View == block.QC.View+1
+		// Rev(nader): Not sure about this AdvanceView_qc function. See comment in that function.
 		node.AdvanceView_qc(block.QC)
 	} else {
 		// If we have an AggregateQC set on the block, it means the nodes decided
@@ -686,6 +714,7 @@ func handleBlockFromPeer(block *Block, node *Node, safeblocks *SafeBlockMap, com
 		}
 		// We make sure that the block’s QC matches the view of the highest QC that we’re aware of.
 		safeVote = block.QC.View == node.HighestQC.View
+		// Rev(nader): Not sure about this AdvanceView_Aggqc function. See comment in that function.
 		node.AdvanceView_Aggqc(block.AggregateQC)
 	}
 
@@ -693,6 +722,9 @@ func handleBlockFromPeer(block *Block, node *Node, safeblocks *SafeBlockMap, com
 	if safeVote {
 		// Construct the vote message. The vote will contain the validator's
 		// signature on the <view, blockHash> pair.
+		// Rev(nader): This is OK as long as the Hash() function defined computes:
+		// Hash(block.View, HASH(block.Txns.ToBytes())). I think right now it's
+		// skipping the step where it hashes the txn bytes.
 		payload := Hash(block.View, block.Txns)
 		blockHashSignature, _ := Sign(payload, *node.PrivKey)
 
@@ -705,6 +737,8 @@ func handleBlockFromPeer(block *Block, node *Node, safeblocks *SafeBlockMap, com
 		// Send the vote directly to the next leader.
 		Send(voteMsg, computeLeader(node.CurView+1, node.PubKeys))
 		// We can now proceed to the next view.
+		// Rev(nader): Notice we did this AvanceView call above already. Do we want to be doing it again?
+		// Maybe above you just want safeVote = true so that this logic can execute properly.
 		node.AdvanceView_qc(block.QC)
 		node.Last_voted_view = uint64(math.Max(float64(node.Last_voted_view), float64(node.CurView)))
 
@@ -744,7 +778,8 @@ func validateVote(vote VoteMessage, node *Node, safeblocks *SafeBlockMap) bool {
 	// Make sure that the BlockHash in the view matches our local BlockHash history.
 	blockHash, err := GetBlockIDForView(vote.View, *safeblocks)
 	if err != nil {
-
+		// Rev(nader): Do we need fetching logic here if we don't have the block?
+		return false
 	}
 	if blockHash != vote.BlockHash {
 		return false
