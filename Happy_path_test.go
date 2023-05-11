@@ -1,21 +1,18 @@
 package hotstuff_pseudocode
 
 import (
-	"sync"
 	"testing"
 )
 
 func NewSafeBlockMap() *SafeBlockMap {
 	return &SafeBlockMap{
 		Blocks: make(map[[32]byte]*Block),
-		Mutex:  sync.Mutex{},
 	}
 }
 
 func NewCommittedBlock() *CommittedBlockMap {
 	return &CommittedBlockMap{
 		Block: make(map[[32]byte]*Block),
-		Mutex: sync.Mutex{},
 	}
 }
 func TestHandleVoteMessageFromPeer(t *testing.T) {
@@ -35,7 +32,7 @@ func TestHandleVoteMessageFromPeer(t *testing.T) {
 	}
 
 	// Set up a mock SafeBlockMap with a single block
-	genesisBlock := Block{PreviousBlockHash: [32]byte{}, View: 0}
+	genesisBlock := Block{View: 0, Txns: GenerateTxns(3)}
 	safeBlocks := NewSafeBlockMap()
 	safeBlocks.Put(&genesisBlock)
 
@@ -43,28 +40,28 @@ func TestHandleVoteMessageFromPeer(t *testing.T) {
 	vote := &VoteMessage{
 		ValidatorPublicKey:            leaderPubKey,
 		PartialViewBlockHashSignature: []byte("sig1"),
-		BlockHash:                     genesisBlock.Hash(),
+		BlockHash:                     Hash(genesisBlock.View, genesisBlock.Txns),
 		View:                          1,
 	}
 
 	// Set up a mock voteseen map with one vote
 	voteseen := &map[[32]byte]map[string]VoteMessage{
-		Hash(1, genesisBlock.Hash()): {
+		Hash(1, genesisBlock.Txns): {
 			string(leaderPubKey): *vote,
 		},
 	}
 
-	// Call handleVoteMessageFromPeer with the mock arguments
+	// Call handleVoteMessageFromPeer
 	handleVoteMessageFromPeer(vote, node, safeBlocks, voteseen)
 
 	// Assert that the vote was added to the voteseen map
-	if _, ok := (*voteseen)[Hash(1, genesisBlock.Hash())][string(leaderPubKey)]; !ok {
+	if _, ok := (*voteseen)[Hash(1, genesisBlock.Txns)][string(leaderPubKey)]; !ok {
 		t.Errorf("Expected vote to be added to voteseen map")
 	}
 
 	// Assert that the total vote stake is correctly computed
 	expectedVoteStake := 100 // the leader has a stake of 100
-	voteStake := ComputeStake((*voteseen)[Hash(1, genesisBlock.Hash())], node.PubKeyToStake)
+	voteStake := ComputeStake((*voteseen)[Hash(1, genesisBlock.Txns)], node.PubKeyToStake)
 	if voteStake != expectedVoteStake {
 		t.Errorf("Expected vote stake to be %d, but got %d", expectedVoteStake, voteStake)
 	}
@@ -72,8 +69,10 @@ func TestHandleVoteMessageFromPeer(t *testing.T) {
 }
 
 func TestHandleBlockFromPeer(t *testing.T) {
+	txns := GenerateTxns(3)
+
 	// Create a genesis block
-	genesisBlock := Block{PreviousBlockHash: [32]byte{}, View: 0}
+	genesisBlock := Block{Txns: txns, View: 0}
 
 	// Create a safe block map and add the genesis block to it
 	safeBlocks := NewSafeBlockMap()
@@ -84,40 +83,49 @@ func TestHandleBlockFromPeer(t *testing.T) {
 	committedBlocks.Put(&genesisBlock)
 
 	// Create a node with the genesis block as its highest QC
+	leaderPubKey := []byte("leader pub key")
+	//leaderPrivKey := []byte("leader priv key")
 	node := Node{
 		CurView: 0,
 		HighestQC: &QuorumCertificate{
 			View:                           0,
 			BlockHash:                      genesisBlock.Hash(),
 			CombinedViewBlockHashSignature: BLSMultiSignature{CombinedSignature: []byte("a"), ValidatorIDBitmap: []byte("a")},
+
 		},
 		PubKeys:         []PublicKey{{}},
 		PrivKey:         &PrivateKey{},
 		Last_voted_view: 0,
+		PubKey:          (*PublicKey)(&leaderPubKey),
 	}
 
 	// Create three blocks with the appropriate QC
-	block1 := Block{PreviousBlockHash: genesisBlock.Hash(), View: 0}
+	txns = GenerateTxns(3)
+	block1 := Block{Txns: txns, View: 1}
 	qc1 := QuorumCertificate{
 		View:                           0,
 		BlockHash:                      genesisBlock.Hash(),
 		CombinedViewBlockHashSignature: BLSMultiSignature{CombinedSignature: []byte("a"), ValidatorIDBitmap: []byte("a")},
+
 	}
 	block1.SetQC(&qc1)
+	txns = GenerateTxns(3)
 
-	block2 := Block{PreviousBlockHash: block1.Hash(), View: 0}
+	block2 := Block{Txns: txns, View: 2}
 	qc2 := QuorumCertificate{
 		View:                           0,
 		BlockHash:                      block1.Hash(),
 		CombinedViewBlockHashSignature: BLSMultiSignature{CombinedSignature: []byte("a"), ValidatorIDBitmap: []byte("a")},
+
 	}
 	block2.SetQC(&qc2)
-
-	block3 := Block{PreviousBlockHash: block2.Hash(), View: 0}
+	txns = GenerateTxns(3)
+	block3 := Block{Txns: txns, View: 3}
 	qc3 := QuorumCertificate{
 		View:                           0,
 		BlockHash:                      block2.Hash(),
 		CombinedViewBlockHashSignature: BLSMultiSignature{CombinedSignature: []byte("a"), ValidatorIDBitmap: []byte("a")},
+
 	}
 	block3.SetQC(&qc3)
 
@@ -127,15 +135,21 @@ func TestHandleBlockFromPeer(t *testing.T) {
 	handleBlockFromPeer(&block3, &node, safeBlocks, committedBlocks)
 
 	// Verify that block1 is in the committed block map
-	if !committedBlocks.Contains(block1.Hash()) {
+	//if !committedBlocks.Contains(block1.Hash()) {
+	if ok, err := Contains(committedBlocks.Block, Hash(1, block1.Txns)); err != nil || !ok {
 		t.Errorf("Block 1 not found in committed block map")
 	}
 
 	// Verify that block2 and block3 are in the safe block map
-	if !safeBlocks.Contains(block2.Hash()) {
+	if ok, err := Contains(safeBlocks.Blocks, Hash(2, block2.Txns)); err != nil || !ok {
 		t.Errorf("Block 2 not found in safe block map")
 	}
-	if !safeBlocks.Contains(block3.Hash()) {
+
+	if ok, err := Contains(safeBlocks.Blocks, Hash(3, block3.Txns)); err != nil || !ok {
 		t.Errorf("Block 3 not found in safe block map")
+	}
+
+	if ok, _ := Contains(committedBlocks.Block, Hash(3, block3.Txns)); ok {
+		t.Errorf("Block 3 is found in Committed block map. It shouldn't have been saved")
 	}
 }
