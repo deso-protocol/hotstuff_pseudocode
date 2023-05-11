@@ -89,8 +89,9 @@ func TestHandleBlockFromPeer(t *testing.T) {
 		CurView: 0,
 		HighestQC: &QuorumCertificate{
 			View:                           0,
-			BlockHash:                      Hash(0, genesisBlock.Txns),
-			CombinedViewBlockHashSignature: BLSCombinedSignature{CombinedSignature: []byte("a"), ValidatorIDBitmap: []byte("a")},
+			BlockHash:                      genesisBlock.Hash(),
+			CombinedViewBlockHashSignature: BLSMultiSignature{CombinedSignature: []byte("a"), ValidatorIDBitmap: []byte("a")},
+
 		},
 		PubKeys:         []PublicKey{{}},
 		PrivKey:         &PrivateKey{},
@@ -103,25 +104,28 @@ func TestHandleBlockFromPeer(t *testing.T) {
 	block1 := Block{Txns: txns, View: 1}
 	qc1 := QuorumCertificate{
 		View:                           0,
-		BlockHash:                      Hash(0, genesisBlock.Txns),
-		CombinedViewBlockHashSignature: BLSCombinedSignature{CombinedSignature: []byte("a"), ValidatorIDBitmap: []byte("a")},
+		BlockHash:                      genesisBlock.Hash(),
+		CombinedViewBlockHashSignature: BLSMultiSignature{CombinedSignature: []byte("a"), ValidatorIDBitmap: []byte("a")},
+
 	}
 	block1.SetQC(&qc1)
 	txns = GenerateTxns(3)
 
 	block2 := Block{Txns: txns, View: 2}
 	qc2 := QuorumCertificate{
-		View:                           1,
-		BlockHash:                      Hash(1, block1.Txns),
-		CombinedViewBlockHashSignature: BLSCombinedSignature{CombinedSignature: []byte("a"), ValidatorIDBitmap: []byte("a")},
+		View:                           0,
+		BlockHash:                      block1.Hash(),
+		CombinedViewBlockHashSignature: BLSMultiSignature{CombinedSignature: []byte("a"), ValidatorIDBitmap: []byte("a")},
+
 	}
 	block2.SetQC(&qc2)
 	txns = GenerateTxns(3)
 	block3 := Block{Txns: txns, View: 3}
 	qc3 := QuorumCertificate{
-		View:                           2,
-		BlockHash:                      Hash(2, block2.Txns),
-		CombinedViewBlockHashSignature: BLSCombinedSignature{CombinedSignature: []byte("a"), ValidatorIDBitmap: []byte("a")},
+		View:                           0,
+		BlockHash:                      block2.Hash(),
+		CombinedViewBlockHashSignature: BLSMultiSignature{CombinedSignature: []byte("a"), ValidatorIDBitmap: []byte("a")},
+
 	}
 	block3.SetQC(&qc3)
 
