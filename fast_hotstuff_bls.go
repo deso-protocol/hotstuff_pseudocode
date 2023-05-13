@@ -27,7 +27,9 @@ import (
 // Using BLS signatures is preferred because it's much more space-efficient
 // and computationally efficient than using raw signatures. In addition to
 // condensing n signatures down to a single O(1) value, verifying a
-//  BLS multi signature can be done with only one expensive signature
+//
+//	BLS multi signature can be done with only one expensive signature
+//
 // check, as opposed to checking n signatures individually.
 type BLSPartialSignature []byte
 
@@ -662,7 +664,7 @@ func handleBlockFromPeer(block *Block, node *Node, safeblocks *SafeBlockMap, com
 		// the block accordingly.
 
 		// First we make sure the block contains a valid AggregateQC.
-		validateTimeoutProof(block.AggregateQC)
+		validateTimeoutProof(block.AggregateQC, node.PubKeys)
 		// We find the QC with the highest view among the QCs contained in the
 		// AggregateQC.
 		highestTimeoutQC := block.AggregateQC.ValidatorTimeoutHighQC
@@ -856,6 +858,47 @@ func handleVoteMessageFromPeer(vote *VoteMessage, node *Node, safeblocks *SafeBl
 	// call ResetTimeoutAndAdvanceView() here.
 	broadcast(block)
 }
+
+// ///////Timeout and Timers
+type Timer struct {
+	baseDuration time.Duration
+	timer        *time.Timer
+	retries      int
+}
+
+func NewTimer(baseDuration time.Duration) *Timer {
+	return &Timer{
+		baseDuration: baseDuration,
+		retries:      1,
+	}
+}
+
+func (t *Timer) Start() {
+	t.timer = time.AfterFunc(t.getDuration(), t.onTimeout)
+}
+
+func (t *Timer) Stop() {
+	if t.timer != nil {
+		t.timer.Stop()
+	}
+}
+
+func (t *Timer) Reset() {
+	t.Stop()
+	t.timer.Reset(t.getDuration())
+}
+
+func (t *Timer) onTimeout() {
+	// Do something when the timer times out
+	t.retries++
+	t.Start()
+}
+
+func (t *Timer) getDuration() time.Duration {
+	return t.baseDuration * time.Duration(1<<uint(t.retries-1))
+}
+
+//////
 
 func broadcast(block Block) {
 	//todo: implementing broadcast
