@@ -442,8 +442,15 @@ func getBitAtIndex(bitmap []byte, i int) bool {
 	return bitmap[byteIndex]&(1<<bitIndex) != 0
 }
 
-func Send(msg VoteMessage, leader PublicKey) {
-
+func Send(msg interface{}, nextleader PublicKey) {
+	switch msg.(type) {
+	case VoteMessage:
+		// send vote message
+	case TimeoutMessage:
+		// send timeout message
+	default:
+		// handle unknown message type
+	}
 }
 
 func GetBlockIDForView(view uint64, blockMap SafeBlockMap) ([32]byte, error) {
@@ -869,12 +876,14 @@ type Timer struct {
 func NewTimer(baseDuration time.Duration) *Timer {
 	return &Timer{
 		baseDuration: baseDuration,
-		retries:      1,
+		retries:      0,
 	}
 }
 
-func (t *Timer) Start() {
-	t.timer = time.AfterFunc(t.getDuration(), t.onTimeout)
+func (t *Timer) Start(node *Node) {
+	t.timer = time.AfterFunc(t.getDuration(), func() {
+		t.onTimeout(node)
+	})
 }
 
 func (t *Timer) Stop() {
@@ -888,17 +897,29 @@ func (t *Timer) Reset() {
 	t.timer.Reset(t.getDuration())
 }
 
-func (t *Timer) onTimeout() {
-	// Do something when the timer times out
+func (t *Timer) onTimeout(node *Node) {
 	t.retries++
-	t.Start()
+	timeoutMsg := t.CreateTimeout_msg(node)
+	Send(timeoutMsg, computeLeader(node.CurView+1, node.PubKeys))
+	t.Start(node)
 }
 
 func (t *Timer) getDuration() time.Duration {
-	return t.baseDuration * time.Duration(1<<uint(t.retries-1))
+	return t.baseDuration * time.Duration(1<<uint(t.retries))
 }
 
 //////
+
+func (t *Timer) CreateTimeout_msg(node *Node) *TimeoutMessage {
+	sig, _ := Sign(Hash(node.CurView, node.HighestQC), *node.PrivKey)
+	return &TimeoutMessage{
+		ValidatorPublicKey:          *node.PubKey,
+		View:                        node.CurView,
+		HighQC:                      *node.HighestQC,
+		PartialTimeoutViewSignature: sig,
+	}
+
+}
 
 func broadcast(block Block) {
 	//todo: implementing broadcast
