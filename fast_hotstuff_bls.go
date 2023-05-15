@@ -415,14 +415,14 @@ func Sign(payload [32]byte, privKey PrivateKey) ([]byte, error) {
 //votesSeen.Reset() and
 //	TimeoutsSeenMap.Reset(certificate.View) can be called later whenever needed.
 
-func (node Node) AdvanceView_qc(certificate QuorumCertificate) {
-	node.CurView = certificate.View + 1
+func (node Node) AdvanceView(block *Block) {
+	if block.AggregateQC.isEmpty() {
+		node.CurView = block.QC.View + 1
 
-	node.ResetTimeout()
-}
+	} else {
+		node.CurView = block.AggregateQC.View + 1
+	}
 
-func (node Node) AdvanceView_Aggqc(agqc AggregateQC) {
-	agqc.View = agqc.View + 1
 	node.ResetTimeout()
 }
 
@@ -665,7 +665,6 @@ func handleBlockFromPeer(block *Block, node *Node, safeblocks *SafeBlockMap, com
 		// block. This means that the parent and child blocks have consecutive
 		// views. We use the current block’s QC to find the view of the parent.
 		safeVote = block.View == block.QC.View+1
-		node.AdvanceView_qc(block.QC)
 	} else {
 		// If we have an AggregateQC set on the block, it means the nodes decided
 		// to skip a view by sending TimeoutMessages to the leader, so we process
@@ -682,8 +681,7 @@ func handleBlockFromPeer(block *Block, node *Node, safeblocks *SafeBlockMap, com
 			node.HighestQC = &(highestTimeoutQC)
 		}
 		// We make sure that the block’s QC matches the view of the highest QC that we’re aware of.
-		safeVote = block.QC.View == node.HighestQC.View
-		node.AdvanceView_Aggqc(block.AggregateQC)
+		safeVote = block.QC.View == node.HighestQC.View && block.AggregateQC.View+1 == block.View
 	}
 
 	// If safeVote is true, we will vote on the block.
@@ -702,7 +700,7 @@ func handleBlockFromPeer(block *Block, node *Node, safeblocks *SafeBlockMap, com
 		// Send the vote directly to the next leader.
 		Send(voteMsg, computeLeader(node.CurView+1, node.PubKeys))
 		// We can now proceed to the next view.
-		node.AdvanceView_qc(block.QC)
+		node.AdvanceView(block)
 		node.Last_voted_view = uint64(math.Max(float64(node.Last_voted_view), float64(node.CurView)))
 
 		// Add the block to the safeblocks struct.

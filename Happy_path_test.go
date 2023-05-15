@@ -89,9 +89,8 @@ func TestHandleBlockFromPeer(t *testing.T) {
 		CurView: 0,
 		HighestQC: &QuorumCertificate{
 			View:                           0,
-			BlockHash:                      genesisBlock.Hash(),
+			BlockHash:                      Hash(genesisBlock.View, genesisBlock.Txns),
 			CombinedViewBlockHashSignature: BLSMultiSignature{CombinedSignature: []byte("a"), ValidatorIDBitmap: []byte("a")},
-
 		},
 		PubKeys:         []PublicKey{{}},
 		PrivKey:         &PrivateKey{},
@@ -104,36 +103,34 @@ func TestHandleBlockFromPeer(t *testing.T) {
 	block1 := Block{Txns: txns, View: 1}
 	qc1 := QuorumCertificate{
 		View:                           0,
-		BlockHash:                      genesisBlock.Hash(),
+		BlockHash:                      Hash(genesisBlock.View, genesisBlock.Txns),
 		CombinedViewBlockHashSignature: BLSMultiSignature{CombinedSignature: []byte("a"), ValidatorIDBitmap: []byte("a")},
-
 	}
 	block1.SetQC(&qc1)
 	txns = GenerateTxns(3)
 
 	block2 := Block{Txns: txns, View: 2}
 	qc2 := QuorumCertificate{
-		View:                           0,
-		BlockHash:                      block1.Hash(),
+		View:                           1,
+		BlockHash:                      Hash(block1.View, block1.Txns),
 		CombinedViewBlockHashSignature: BLSMultiSignature{CombinedSignature: []byte("a"), ValidatorIDBitmap: []byte("a")},
-
 	}
 	block2.SetQC(&qc2)
 	txns = GenerateTxns(3)
 	block3 := Block{Txns: txns, View: 3}
 	qc3 := QuorumCertificate{
-		View:                           0,
-		BlockHash:                      block2.Hash(),
+		View:                           2,
+		BlockHash:                      Hash(block2.View, block2.Txns),
 		CombinedViewBlockHashSignature: BLSMultiSignature{CombinedSignature: []byte("a"), ValidatorIDBitmap: []byte("a")},
-
 	}
 	block3.SetQC(&qc3)
 
 	// Handle the three blocks from peers
 	handleBlockFromPeer(&block1, &node, safeBlocks, committedBlocks)
-	handleBlockFromPeer(&block2, &node, safeBlocks, committedBlocks)
-	handleBlockFromPeer(&block3, &node, safeBlocks, committedBlocks)
 
+	handleBlockFromPeer(&block2, &node, safeBlocks, committedBlocks)
+
+	handleBlockFromPeer(&block3, &node, safeBlocks, committedBlocks)
 	// Verify that block1 is in the committed block map
 	//if !committedBlocks.Contains(block1.Hash()) {
 	if ok, err := Contains(committedBlocks.Block, Hash(1, block1.Txns)); err != nil || !ok {
