@@ -1,6 +1,7 @@
 package hotstuff_pseudocode
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -149,4 +150,17 @@ func TestHandleBlockFromPeer(t *testing.T) {
 	if ok, _ := Contains(committedBlocks.Block, Hash(3, block3.Txns)); ok {
 		t.Errorf("Block 3 is found in Committed block map. It shouldn't have been saved")
 	}
+
+	////Verify node state
+	fmt.Print("nodes view is", node.CurView)
+	if node.CurView != 3 {
+		t.Errorf("view has not been correctly incremented.")
+
+	}
+
+	if node.Last_voted_view != 3 {
+		t.Errorf("view has not been correctly incremented.")
+
+	}
+
 }

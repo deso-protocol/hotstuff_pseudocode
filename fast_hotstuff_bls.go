@@ -415,12 +415,12 @@ func Sign(payload [32]byte, privKey PrivateKey) ([]byte, error) {
 //votesSeen.Reset() and
 //	TimeoutsSeenMap.Reset(certificate.View) can be called later whenever needed.
 
-func (node Node) AdvanceView(block *Block) {
+func (node *Node) AdvanceView(block *Block) {
 	if block.AggregateQC.isEmpty() {
 		node.CurView = block.QC.View + 1
-
 	} else {
 		node.CurView = block.AggregateQC.View + 1
+
 	}
 
 	node.ResetTimeout()
