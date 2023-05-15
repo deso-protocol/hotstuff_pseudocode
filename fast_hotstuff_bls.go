@@ -416,12 +416,13 @@ func Sign(payload [32]byte, privKey PrivateKey) ([]byte, error) {
 //	TimeoutsSeenMap.Reset(certificate.View) can be called later whenever needed.
 
 func (node Node) AdvanceView_qc(certificate QuorumCertificate) {
-	certificate.View += 1
+	node.CurView = certificate.View + 1
+
 	node.ResetTimeout()
 }
 
 func (node Node) AdvanceView_Aggqc(agqc AggregateQC) {
-	agqc.View += 1
+	agqc.View = agqc.View + 1
 	node.ResetTimeout()
 }
 
@@ -899,6 +900,7 @@ func (t *Timer) Reset() {
 
 func (t *Timer) onTimeout(node *Node) {
 	t.retries++
+	node.CurView++
 	timeoutMsg := t.CreateTimeout_msg(node)
 	Send(timeoutMsg, computeLeader(node.CurView+1, node.PubKeys))
 	t.Start(node)
@@ -907,8 +909,6 @@ func (t *Timer) onTimeout(node *Node) {
 func (t *Timer) getDuration() time.Duration {
 	return t.baseDuration * time.Duration(1<<uint(t.retries))
 }
-
-//////
 
 func (t *Timer) CreateTimeout_msg(node *Node) *TimeoutMessage {
 	sig, _ := Sign(Hash(node.CurView, node.HighestQC), *node.PrivKey)
@@ -921,6 +921,7 @@ func (t *Timer) CreateTimeout_msg(node *Node) *TimeoutMessage {
 
 }
 
+// ////
 func broadcast(block Block) {
 	//todo: implementing broadcast
 }
