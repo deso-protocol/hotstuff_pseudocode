@@ -2,12 +2,13 @@ package hotstuff_pseudocode
 
 import (
 	"bytes"
+	//"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
-	"math/rand"
+	mrand "math/rand"
 	"reflect"
 	"sort"
 	"strconv"
@@ -17,44 +18,8 @@ import (
 // This corresponds to the Algorithm 3 in the Fast-HotStuff
 // paper https://arxiv.org/pdf/2010.11454.pdf
 
-// A BLSPartialSignature is a signature typically made by a validator on a
-// particular payload that can be combined with other signatures from other
-// validators for the same or different payload. For example, if a hundred
-// validators were to sign Hash(123), and another hundred were to sign Hash(456),
-// all of those signatures could be combined using BLS multi-signature scheme
-// into a single BLSMultiSignature.
-//
-// Using BLS signatures is preferred because it's much more space-efficient
-// and computationally efficient than using raw signatures. In addition to
-// condensing n signatures down to a single O(1) value, verifying a
-//
-//	BLS multi signature can be done with only one expensive signature
-//
-// check, as opposed to checking n signatures individually.
 type BLSPartialSignature []byte
 
-// A BLSMultiSignature is a multi-signature that is the result of combining multiple
-// BLSPartialSignatures. In order to verify a BLSMultiSignature, a validator needs
-// the public keys of all of the validators whose signatures were combined.
-// This is why a secondary field called ValidatorIDBitmap is included
-// in this struct. It allows anyone who receives a BLSMultiSignature to check it
-// by first looking up the public keys of all of the validators whose signatures were
-// combined, and then verifying the BLSMultiSignature using those public keys.
-// Along with the BLSMultiSignature, we also need to store the list of messages
-// signed by validators that were used to make this multi-signature. We store this
-// outside the BLSMultiSignature struct, in the AggregateQC.
-//
-// Importantly, while ValidatorIDBitmap technically requires O(n) space, where n is
-// the number of validators, it can be compressed significantly using a bitmap that
-// stores the indices of the validators whose signatures were combined. For
-// example, because all validators are known at all times, a convention can be used
-// whereby validators are sorted by their public keys. Then, the ValidatorIDBitmap
-// is an n-bit number, where the i-th bit determines whether the i-th validator
-// in the sorted list participated it the combined signature.
-//
-// This means that even if you have 10,000 validators involved in a signature, you will
-// only need about a kilobyte of space to store the ValidatorIDBitmap, as the storage
-// cost is asymptotically: 1 bit per validator.
 type BLSMultiSignature struct {
 	CombinedSignature []byte
 	ValidatorIDBitmap []byte
@@ -68,14 +33,14 @@ type TxnMsg struct {
 }
 
 func GenerateTxns(n int) []TxnMsg {
-	rand.Seed(time.Now().UnixNano())
+	mrand.Seed(time.Now().UnixNano())
 
 	var txns []TxnMsg
 	for i := 0; i < n; i++ {
 		txns = append(txns, TxnMsg{
-			From:   strconv.Itoa(rand.Intn(1000)),
-			To:     strconv.Itoa(rand.Intn(1000)),
-			Amount: rand.Intn(100),
+			From:   strconv.Itoa(mrand.Intn(1000)),
+			To:     strconv.Itoa(mrand.Intn(1000)),
+			Amount: mrand.Intn(100),
 		})
 	}
 	return txns
@@ -90,7 +55,7 @@ type Node struct {
 	PubKeys             []PublicKey
 	LatestCommittedView uint64
 	Last_voted_view     uint64
-	PubKeyToStake       map[string]int
+	PubKeyToStake       map[string]uint64
 }
 
 // For the purposes of this code, we will assume that PublicKey and PrivateKey can
@@ -286,30 +251,77 @@ func (node *Node) ResetTimeout() {
 
 }
 
-// Compute the leader node for the given view number and list of public keys
-func computeLeader(viewNum uint64, pubKeys []PublicKey) PublicKey {
-	// Compute the hash of the view number as a byte slice
-	viewHash := sha256.Sum256([]byte{byte(viewNum), byte(viewNum >> 8), byte(viewNum >> 16), byte(viewNum >> 24),
-		byte(viewNum >> 32), byte(viewNum >> 40), byte(viewNum >> 48), byte(viewNum >> 56)})
+func computeLeader(view uint64, pubKeyToStake map[string]uint64) (string, error) {
+	// Calculate the cumulative stakes slice and total stake
+	cumulativeStakesSlice, totalStake, err := calculateCumulativeStakesSlice(pubKeyToStake)
+	if err != nil {
+		return "", err
+	}
 
-	// Sort the public keys lexicographically
-	sort.Slice(pubKeys, func(i, j int) bool {
-		return bytes.Compare(pubKeys[i], pubKeys[j]) < 0
-	})
+	// Initialize the random number generator with the provided seed
+	r := mrand.New(mrand.NewSource(int64(view)))
 
-	// Compute the index of the leader node as the least significant 8 bits of the hash
-	idx := int(viewHash[31]) % len(pubKeys)
+	// Generate a random number within the range of 0 to totalStake
+	randomNumber := r.Uint64() % (totalStake + 1)
 
-	// Return the public key of the leader node
-	return pubKeys[idx]
+	fmt.Println("Random number is", randomNumber)
+
+	var leaderPubKey string
+	for leaderPubKey = range cumulativeStakesSlice {
+		if leaderPubKey == "" {
+			continue
+		}
+
+		if isWithinRange(randomNumber, cumulativeStakesSlice[leaderPubKey], cumulativeStakesSlice[leaderPubKey]+pubKeyToStake[leaderPubKey]) {
+			break
+		}
+	}
+
+	if leaderPubKey == "" {
+		return "", fmt.Errorf("no leader found")
+	}
+
+	return leaderPubKey, nil
 }
 
-func (node *Node) AmIaLeader(viewNum uint64) bool {
-	//	pubkey := computeLeader(viewNum, node.PubKeys)
-	//	if pubkey.Equals(*node.PubKey) {
-	//return true
-	//}
-	return true
+// Calculate the cumulative stakes slice and total stake
+func calculateCumulativeStakesSlice(pubKeyToStake map[string]uint64) (map[string]uint64, uint64, error) {
+	cumulativeStakesSlice := make(map[string]uint64)
+	var cumulativeStake uint64
+
+	// Sort the public keys lexicographically
+	var pubKeys []string
+	for pubKey := range pubKeyToStake {
+		pubKeys = append(pubKeys, pubKey)
+	}
+	sort.Strings(pubKeys)
+
+	for _, pubKey := range pubKeys {
+		stake := pubKeyToStake[pubKey]
+		if stake == 0 {
+			return nil, 0, fmt.Errorf("stake for pubkey '%s' cannot be zero", pubKey)
+		}
+
+		cumulativeStake += stake
+		cumulativeStakesSlice[pubKey] = cumulativeStake
+	}
+
+	if cumulativeStake == 0 {
+		return nil, 0, fmt.Errorf("total stake cannot be zero")
+	}
+
+	return cumulativeStakesSlice, cumulativeStake, nil
+}
+
+// Check if the randomly chosen value is within the range of stake for a specific leader
+func isWithinRange(randomNumber, min, max uint64) bool {
+	// If randomNumber is greater than the min and randomNumber is equal or smaller than
+	// the max, then randomNumber is within range
+	if randomNumber > min && randomNumber <= max {
+		return true
+	} else {
+		return false
+	}
 }
 
 func Hash(viewNumber uint64, data interface{}) [32]byte {
@@ -521,16 +533,26 @@ func sanityCheckBlock(block Block, node *Node) bool {
 	// would simply not process the future block until downloading and processing the
 	// previous block referred to by its QC.
 	if block.View < node.CurView {
+		fmt.Println("View is smaller than currView")
 		return false
 	}
 
 	if block.View <= node.Last_voted_view {
 		//Have already voted for the block.
+		fmt.Println("View is smaller than node.Last_voted_view")
+
 		return false
 	}
 
 	// Check that the block's proposer is the expected leader for the current view.
-	if !block.ProposerPublicKey.Equals(computeLeader(block.View, node.PubKeys)) {
+	leader, _ := computeLeader(block.View, node.PubKeyToStake)
+	if !block.ProposerPublicKey.Equals(PublicKey(leader)) {
+		fmt.Println("proposer key is different")
+		fmt.Println("block.ProposerPublicKey is ", string(block.ProposerPublicKey))
+		fmt.Println("Computed pubkey for leader is ", string(leader))
+		fmt.Println("Computed pubkey above is for the view", block.View)
+		fmt.Println(" pubkey to stake mape in the main is", node.PubKeyToStake)
+
 		return false
 	}
 
@@ -652,6 +674,7 @@ func handleBlockFromPeer(block *Block, node *Node, safeblocks *SafeBlockMap, com
 	// Make sure that the block contains a valid QC, signature, transactions,
 	// and that it's for the current view.
 	if !sanityCheckBlock(*block, node) {
+		fmt.Println("Failed inside sanity check")
 		return
 	}
 
@@ -688,6 +711,7 @@ func handleBlockFromPeer(block *Block, node *Node, safeblocks *SafeBlockMap, com
 	if safeVote {
 		// Construct the vote message. The vote will contain the validator's
 		// signature on the <view, blockHash> pair.
+		fmt.Println("Inside safeVote!!!!!!!!!!!!ln")
 		payload := Hash(block.View, block.Txns)
 		blockHashSignature, _ := Sign(payload, *node.PrivKey)
 
@@ -698,9 +722,12 @@ func handleBlockFromPeer(block *Block, node *Node, safeblocks *SafeBlockMap, com
 			PartialViewBlockHashSignature: blockHashSignature,
 		}
 		// Send the vote directly to the next leader.
-		Send(voteMsg, computeLeader(node.CurView+1, node.PubKeys))
+		//	fmt.Print("Pubkey to stake is", node.PubKeyToStake)
+		leader, _ := computeLeader(node.CurView+1, node.PubKeyToStake)
+		Send(voteMsg, PublicKey(leader))
 		// We can now proceed to the next view.
 		node.AdvanceView(block)
+		fmt.Println("View is advanced for the block ", block.View)
 		node.Last_voted_view = uint64(math.Max(float64(node.Last_voted_view), float64(node.CurView)))
 
 		// Add the block to the safeblocks struct.
@@ -753,8 +780,8 @@ func validateVote(vote VoteMessage, node *Node, safeblocks *SafeBlockMap) bool {
 
 	return true
 }
-func ComputeStake(messages interface{}, pubKeyToStake map[string]int) int {
-	totalStake := 0
+func ComputeStake(messages interface{}, pubKeyToStake map[string]uint64) uint64 {
+	totalStake := uint64(0)
 	switch m := messages.(type) {
 	case map[string]VoteMessage:
 		for _, vote := range m {
@@ -794,8 +821,8 @@ func AppendVoteMessage(votesSeen *map[[32]byte]map[string]VoteMessage, vote Vote
 	innerMap[string(vote.ValidatorPublicKey)] = vote
 }
 
-func GetTotalStake(pubKeyToStake map[string]int) int {
-	totalStake := 0
+func GetTotalStake(pubKeyToStake map[string]uint64) uint64 {
+	totalStake := uint64(0)
 	for _, stake := range pubKeyToStake {
 		totalStake += stake
 	}
@@ -804,6 +831,11 @@ func GetTotalStake(pubKeyToStake map[string]int) int {
 
 func (b *Block) SetQC(qc *QuorumCertificate) {
 	b.QC = *qc
+}
+
+func (node *Node) AmIaLeader(view uint64) bool {
+	return true
+
 }
 
 // The handleVoteMessageFromPeer is called whenever we receive a vote from a peer.
@@ -897,10 +929,14 @@ func (t *Timer) Reset() {
 }
 
 func (t *Timer) onTimeout(node *Node) {
-	t.retries++
-	node.CurView++
+
+	t.retries = t.retries + 1
+	node.CurView = node.CurView + 1
 	timeoutMsg := t.CreateTimeout_msg(node)
-	Send(timeoutMsg, computeLeader(node.CurView+1, node.PubKeys))
+	leader, _ := computeLeader(node.CurView+1, node.PubKeyToStake)
+	Send(timeoutMsg, PublicKey(leader))
+	//To avoid voting in this view.
+	node.Last_voted_view = uint64(math.Max(float64(node.Last_voted_view), float64(node.CurView)))
 	t.Start(node)
 }
 
