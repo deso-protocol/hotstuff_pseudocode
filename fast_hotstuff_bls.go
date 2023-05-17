@@ -881,8 +881,6 @@ func NewTimer(baseDuration time.Duration) *Timer {
 
 func (t *Timer) Start(node *Node) {
 	t.timer = time.AfterFunc(t.getDuration(), func() {
-		fmt.Print("Node inside start is", node)
-		fmt.Println("Just before ontimeout")
 		t.onTimeout(node)
 	})
 }
@@ -899,10 +897,8 @@ func (t *Timer) Reset() {
 }
 
 func (t *Timer) onTimeout(node *Node) {
-	fmt.Print("node inside ontimeout is", node)
-	t.retries = t.retries + 1
-	node.CurView = node.CurView + 1
-	fmt.Print("node.CurView++ is ", node.CurView)
+	t.retries++
+	node.CurView++
 	timeoutMsg := t.CreateTimeout_msg(node)
 	Send(timeoutMsg, computeLeader(node.CurView+1, node.PubKeys))
 	t.Start(node)
@@ -913,7 +909,7 @@ func (t *Timer) getDuration() time.Duration {
 }
 
 func (t *Timer) CreateTimeout_msg(node *Node) *TimeoutMessage {
-	sig, _ := Sign(Hash(node.CurView, node.HighestQC.View), *node.PrivKey)
+	sig, _ := Sign(Hash(node.CurView, node.HighestQC), *node.PrivKey)
 	return &TimeoutMessage{
 		ValidatorPublicKey:          *node.PubKey,
 		View:                        node.CurView,
