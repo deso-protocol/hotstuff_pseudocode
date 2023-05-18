@@ -1,6 +1,5 @@
 package hotstuff_pseudocode
 
-/*
 import (
 	"testing"
 	"time"
@@ -57,4 +56,3 @@ func TestTimer(t *testing.T) {
 		t.Errorf("Expected duration to be %v, but got %v", expectedDuration, actualDuration)
 	}
 }
-*/

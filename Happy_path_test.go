@@ -192,7 +192,7 @@ func TestHandleBlockFromPeer(t *testing.T) {
 
 }
 
-/*func TestChooseLeader(t *testing.T) {
+func TestChooseLeader(t *testing.T) {
 	// Define the stake weights
 	pubKeyToStake := map[string]uint64{
 		"pubKey1": 100,
@@ -203,23 +203,32 @@ func TestHandleBlockFromPeer(t *testing.T) {
 
 	// Define the expected stake distribution (within a certain range)
 	expectedRange := 0.1
-	minExpectedCount := int(float64(10) * (0.4 - expectedRange))
-	maxExpectedCount := int(float64(10) * (0.4 + expectedRange))
+
+	// Calculate the total stake
+	var totalStake uint64
+	for _, stake := range pubKeyToStake {
+		totalStake += stake
+	}
+
+	// Calculate the expected range for each leader
+	expectedRanges := make(map[string][2]int)
+	for leader, stake := range pubKeyToStake {
+		expectedCount := int(float64(totalStake) * (float64(stake)/float64(totalStake) - expectedRange))
+		expectedRanges[leader] = [2]int{expectedCount, expectedCount + 2*int(float64(totalStake)*expectedRange)}
+	}
 
 	// Counters for each leader
-	leaderCounts := map[string]int{
-		"pubKey1": 0,
-		"pubKey2": 0,
-		"pubKey3": 0,
-		"pubKey4": 0,
+	leaderCounts := make(map[string]int)
+	for leader := range pubKeyToStake {
+		leaderCounts[leader] = 0
 	}
 
 	// Repeat the leader computation 1000 times
-	for i := 0; i < 10; i++ {
-		viewNum := uint64(i) // View number ranges from 0 to 2
+	for i := 0; i < 1000; i++ {
+		viewNum := uint64(i) // View number ranges from 0 to 999
 
 		// Compute the leader for the current view
-		leader, _ := computeLeader(viewNum, &pubKeyToStake)
+		leader, _ := computeLeader(viewNum, pubKeyToStake)
 
 		// Increment the counter for the computed leader
 		leaderCounts[leader]++
@@ -227,10 +236,9 @@ func TestHandleBlockFromPeer(t *testing.T) {
 
 	// Check if the leaders are within the expected stake distribution
 	for leader, count := range leaderCounts {
-		//expectedCount := pubKeyToStake[leader]
-		if count < minExpectedCount || count > maxExpectedCount {
-			t.Errorf("Unexpected leader count for %s. Got %d, expected range: [%d, %d]", leader, count, minExpectedCount, maxExpectedCount)
+		expectedCountRange := expectedRanges[leader]
+		if count < expectedCountRange[0] || count > expectedCountRange[1] {
+			t.Errorf("Unexpected leader count for %s. Got %d, expected range: [%d, %d]", leader, count, expectedCountRange[0], expectedCountRange[1])
 		}
 	}
 }
-*/
