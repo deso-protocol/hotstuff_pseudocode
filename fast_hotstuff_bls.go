@@ -272,13 +272,13 @@ func computeLeader(view uint64, pubKeyToStake map[string]uint64) (string, error)
 		}
 
 	}
-	return "", errors.New("leader cannot be selecrted")
+	return "", fmt.Errorf("no leader found")
+
 }
 
 // Calculate the cumulative stakes slice and total stake
 func calculateCumulativeStakesSlice(pubKeyToStake map[string]uint64) ([]uint64, []string, error) {
 	cumulativeStakesSlice := make([]uint64, 0, len(pubKeyToStake))
-	//fmt.Println("len pubKeyToStake is ", len(pubKeyToStake))
 	var cumulativeStake uint64
 
 	// Sort the public keys lexicographically
@@ -301,8 +301,7 @@ func calculateCumulativeStakesSlice(pubKeyToStake map[string]uint64) ([]uint64, 
 	if cumulativeStake == 0 {
 		return nil, nil, fmt.Errorf("total stake cannot be zero")
 	}
-	fmt.Println("Cumulative stake slice is ", cumulativeStakesSlice)
-	fmt.Println(" pubkeys slice is ", pubKeys)
+
 	return cumulativeStakesSlice, pubKeys, nil
 }
 
