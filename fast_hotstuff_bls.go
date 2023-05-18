@@ -251,28 +251,27 @@ func (node *Node) ResetTimeout() {
 
 }
 
-func computeLeader(view uint64, pubKeyToStake map[string]uint64) (string, error) {
+func computeLeader(view uint64, pubKeyToStake *map[string]uint64) (string, error) {
 	// Calculate the cumulative stakes slice and total stake
-	cumulativeStakesSlice, totalStake, err := calculateCumulativeStakesSlice(pubKeyToStake)
+	cumulativeStakesSlice, totalStake, err := calculateCumulativeStakesSlice(*pubKeyToStake)
 	if err != nil {
 		return "", err
 	}
-
+	fmt.Println("Cumulative Stake slice map is ", cumulativeStakesSlice)
 	// Initialize the random number generator with the provided seed
 	r := mrand.New(mrand.NewSource(int64(view)))
-
 	// Generate a random number within the range of 0 to totalStake
 	randomNumber := r.Uint64() % (totalStake + 1)
 
-	fmt.Println("Random number is", randomNumber)
-
+	fmt.Println("Random number for new view is ", randomNumber)
+	fmt.Println("View is ", view)
 	var leaderPubKey string
 	for leaderPubKey = range cumulativeStakesSlice {
 		if leaderPubKey == "" {
 			continue
 		}
 
-		if isWithinRange(randomNumber, cumulativeStakesSlice[leaderPubKey], cumulativeStakesSlice[leaderPubKey]+pubKeyToStake[leaderPubKey]) {
+		if isWithinRange(randomNumber, cumulativeStakesSlice[leaderPubKey], cumulativeStakesSlice[leaderPubKey]+(*pubKeyToStake)[leaderPubKey]) {
 			break
 		}
 	}
@@ -545,7 +544,7 @@ func sanityCheckBlock(block Block, node *Node) bool {
 	}
 
 	// Check that the block's proposer is the expected leader for the current view.
-	leader, _ := computeLeader(block.View, node.PubKeyToStake)
+	leader, _ := computeLeader(block.View, &node.PubKeyToStake)
 	if !block.ProposerPublicKey.Equals(PublicKey(leader)) {
 		fmt.Println("proposer key is different")
 		fmt.Println("block.ProposerPublicKey is ", string(block.ProposerPublicKey))
@@ -723,7 +722,7 @@ func handleBlockFromPeer(block *Block, node *Node, safeblocks *SafeBlockMap, com
 		}
 		// Send the vote directly to the next leader.
 		//	fmt.Print("Pubkey to stake is", node.PubKeyToStake)
-		leader, _ := computeLeader(node.CurView+1, node.PubKeyToStake)
+		leader, _ := computeLeader(node.CurView+1, &node.PubKeyToStake)
 		Send(voteMsg, PublicKey(leader))
 		// We can now proceed to the next view.
 		node.AdvanceView(block)
@@ -933,7 +932,7 @@ func (t *Timer) onTimeout(node *Node) {
 	t.retries = t.retries + 1
 	node.CurView = node.CurView + 1
 	timeoutMsg := t.CreateTimeout_msg(node)
-	leader, _ := computeLeader(node.CurView+1, node.PubKeyToStake)
+	leader, _ := computeLeader(node.CurView+1, &node.PubKeyToStake)
 	Send(timeoutMsg, PublicKey(leader))
 	//To avoid voting in this view.
 	node.Last_voted_view = uint64(math.Max(float64(node.Last_voted_view), float64(node.CurView)))
@@ -945,7 +944,7 @@ func (t *Timer) getDuration() time.Duration {
 }
 
 func (t *Timer) CreateTimeout_msg(node *Node) *TimeoutMessage {
-	sig, _ := Sign(Hash(node.CurView, node.HighestQC), *node.PrivKey)
+	sig, _ := Sign(Hash(node.CurView, node.HighestQC.View), *node.PrivKey)
 	return &TimeoutMessage{
 		ValidatorPublicKey:          *node.PubKey,
 		View:                        node.CurView,
