@@ -109,9 +109,9 @@ func TestHandleBlockFromPeer(t *testing.T) {
 
 	// Create three blocks with the appropriate QC
 	txns = GenerateTxns(3)
-	output, _ := computeLeader(1, &node.PubKeyToStake)
+	output, _ := computeLeader(1, node.PubKeyToStake)
 	block1 := Block{Txns: txns, View: 1, ProposerPublicKey: PublicKey(output)}
-	fmt.Println("Computed leader for block is ", string(block1.ProposerPublicKey))
+	fmt.Println("Computed leader for block in the test ", string(block1.ProposerPublicKey))
 
 	qc1 := QuorumCertificate{
 		View:                           0,
@@ -120,9 +120,9 @@ func TestHandleBlockFromPeer(t *testing.T) {
 	}
 	block1.SetQC(&qc1)
 	txns = GenerateTxns(3)
-	leader, _ := computeLeader(2, &node.PubKeyToStake)
+	leader, _ := computeLeader(2, node.PubKeyToStake)
 	block2 := Block{Txns: txns, View: 2, ProposerPublicKey: PublicKey(leader)}
-	fmt.Println("Computed leader for block is ", string(block2.ProposerPublicKey))
+	fmt.Println("Computed leader for block in the test", string(block2.ProposerPublicKey))
 	qc2 := QuorumCertificate{
 		View:                           1,
 		BlockHash:                      Hash(block1.View, block1.Txns),
@@ -135,10 +135,10 @@ func TestHandleBlockFromPeer(t *testing.T) {
 	//	fmt.Println("block2 propose is", string(PublicKey(computeLeader(2, node.PubKeyToStake))))
 
 	//	fmt.Println("block3 propose is", string(PublicKey(computeLeader(3, node.PubKeyToStake))))
-	leader, _ = computeLeader(3, &node.PubKeyToStake)
+	leader, _ = computeLeader(3, node.PubKeyToStake)
 
 	block3 := Block{Txns: txns, View: 3, ProposerPublicKey: PublicKey(leader)}
-	fmt.Println("Computed leader for block is ", string(block3.ProposerPublicKey))
+	fmt.Println("Computed leader for block in the test", string(block3.ProposerPublicKey))
 
 	qc3 := QuorumCertificate{
 		View:                           2,

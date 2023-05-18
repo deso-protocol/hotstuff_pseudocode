@@ -251,41 +251,34 @@ func (node *Node) ResetTimeout() {
 
 }
 
-func computeLeader(view uint64, pubKeyToStake *map[string]uint64) (string, error) {
-	// Calculate the cumulative stakes slice and total stake
-	cumulativeStakesSlice, totalStake, err := calculateCumulativeStakesSlice(*pubKeyToStake)
-	if err != nil {
-		return "", err
-	}
-	fmt.Println("Cumulative Stake slice map is ", cumulativeStakesSlice)
+func computeLeader(view uint64, pubKeyToStake map[string]uint64) (string, error) {
+
+	comulativeStakeSlice, orderedpubkeys, _ := calculateCumulativeStakesSlice(pubKeyToStake)
+
 	// Initialize the random number generator with the provided seed
 	r := mrand.New(mrand.NewSource(int64(view)))
+	totalStake := uint64(0)
+	for _, pubkey := range orderedpubkeys {
+		totalStake = totalStake + pubKeyToStake[pubkey]
+	}
+
 	// Generate a random number within the range of 0 to totalStake
 	randomNumber := r.Uint64() % (totalStake + 1)
 
-	fmt.Println("Random number for new view is ", randomNumber)
-	fmt.Println("View is ", view)
-	var leaderPubKey string
-	for leaderPubKey = range cumulativeStakesSlice {
-		if leaderPubKey == "" {
-			continue
+	for idx, cumulativestake := range comulativeStakeSlice {
+
+		if isSmallerorOrEqual(randomNumber, cumulativestake) {
+			return orderedpubkeys[idx], nil
 		}
 
-		if isWithinRange(randomNumber, cumulativeStakesSlice[leaderPubKey], cumulativeStakesSlice[leaderPubKey]+(*pubKeyToStake)[leaderPubKey]) {
-			break
-		}
 	}
-
-	if leaderPubKey == "" {
-		return "", fmt.Errorf("no leader found")
-	}
-
-	return leaderPubKey, nil
+	return "", errors.New("leader cannot be selecrted")
 }
 
 // Calculate the cumulative stakes slice and total stake
-func calculateCumulativeStakesSlice(pubKeyToStake map[string]uint64) (map[string]uint64, uint64, error) {
-	cumulativeStakesSlice := make(map[string]uint64)
+func calculateCumulativeStakesSlice(pubKeyToStake map[string]uint64) ([]uint64, []string, error) {
+	cumulativeStakesSlice := make([]uint64, 0, len(pubKeyToStake))
+	//fmt.Println("len pubKeyToStake is ", len(pubKeyToStake))
 	var cumulativeStake uint64
 
 	// Sort the public keys lexicographically
@@ -298,25 +291,26 @@ func calculateCumulativeStakesSlice(pubKeyToStake map[string]uint64) (map[string
 	for _, pubKey := range pubKeys {
 		stake := pubKeyToStake[pubKey]
 		if stake == 0 {
-			return nil, 0, fmt.Errorf("stake for pubkey '%s' cannot be zero", pubKey)
+			return nil, nil, fmt.Errorf("stake for pubkey '%s' cannot be zero", pubKey)
 		}
 
 		cumulativeStake += stake
-		cumulativeStakesSlice[pubKey] = cumulativeStake
+		cumulativeStakesSlice = append(cumulativeStakesSlice, cumulativeStake)
 	}
 
 	if cumulativeStake == 0 {
-		return nil, 0, fmt.Errorf("total stake cannot be zero")
+		return nil, nil, fmt.Errorf("total stake cannot be zero")
 	}
-
-	return cumulativeStakesSlice, cumulativeStake, nil
+	fmt.Println("Cumulative stake slice is ", cumulativeStakesSlice)
+	fmt.Println(" pubkeys slice is ", pubKeys)
+	return cumulativeStakesSlice, pubKeys, nil
 }
 
-// Check if the randomly chosen value is within the range of stake for a specific leader
-func isWithinRange(randomNumber, min, max uint64) bool {
+// Check if the randomly chosen value is smaller or equal to the range of cumulative stake for a specific leader
+func isSmallerorOrEqual(randomNumber, higher uint64) bool {
 	// If randomNumber is greater than the min and randomNumber is equal or smaller than
 	// the max, then randomNumber is within range
-	if randomNumber > min && randomNumber <= max {
+	if randomNumber <= higher {
 		return true
 	} else {
 		return false
@@ -544,7 +538,7 @@ func sanityCheckBlock(block Block, node *Node) bool {
 	}
 
 	// Check that the block's proposer is the expected leader for the current view.
-	leader, _ := computeLeader(block.View, &node.PubKeyToStake)
+	leader, _ := computeLeader(block.View, node.PubKeyToStake)
 	if !block.ProposerPublicKey.Equals(PublicKey(leader)) {
 		fmt.Println("proposer key is different")
 		fmt.Println("block.ProposerPublicKey is ", string(block.ProposerPublicKey))
@@ -722,7 +716,7 @@ func handleBlockFromPeer(block *Block, node *Node, safeblocks *SafeBlockMap, com
 		}
 		// Send the vote directly to the next leader.
 		//	fmt.Print("Pubkey to stake is", node.PubKeyToStake)
-		leader, _ := computeLeader(node.CurView+1, &node.PubKeyToStake)
+		leader, _ := computeLeader(node.CurView+1, node.PubKeyToStake)
 		Send(voteMsg, PublicKey(leader))
 		// We can now proceed to the next view.
 		node.AdvanceView(block)
@@ -932,7 +926,7 @@ func (t *Timer) onTimeout(node *Node) {
 	t.retries = t.retries + 1
 	node.CurView = node.CurView + 1
 	timeoutMsg := t.CreateTimeout_msg(node)
-	leader, _ := computeLeader(node.CurView+1, &node.PubKeyToStake)
+	leader, _ := computeLeader(node.CurView+1, node.PubKeyToStake)
 	Send(timeoutMsg, PublicKey(leader))
 	//To avoid voting in this view.
 	node.Last_voted_view = uint64(math.Max(float64(node.Last_voted_view), float64(node.CurView)))
