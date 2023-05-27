@@ -187,28 +187,6 @@ type AggregateQC struct {
 	ValidatorCombinedTimeoutSignatures BLSMultiSignature
 }
 
-//  Blocks are bundles of transactions proposed by the current leader.
-//
-// If the block from the previous view was a valid block that 2/3rds of validators
-// have seen and validated, then the next block proposed by the leader will link
-// back to that block by including a QuorumCertificate (QC), which bundles signatures from
-// VoteMessages from 2/3rds of validators, weighted by stake, indicating that
-// these validators believe the previous block to be valid. This is the simple case
-// where everything is running normally, with no timeouts, and the AggregateQC field
-// will be left empty in this case.
-//
-// In the event that 2/3rds of validators timed out in the previous view, then the
-// AggregateQC field will be constructed from TimeouteMessages received from 2/3rds
-// of the validators. In this case, the QC will be set to the QC with the highest
-// view number contained in the AggregateQC, since that is the most recent valid
-// block that 2/3rds of validators have seen.
-//
-// The idea is that each block must link to the most recent valid block that 2/3rds
-// of validators have seen. In normal conditions, the next leader will be able to
-// assemble a QC directly from the VoteMessages they receive. In a timeout scenario,
-// they will instead need to aggregate TimeoutMessages, and assemble them
-// into an AggregateQC.
-
 type Block struct {
 
 	// The public key of the leader who is proposing this block.
@@ -307,8 +285,7 @@ func calculateCumulativeStakesSlice(pubKeyToStake map[string]uint64) ([]uint64, 
 
 // Check if the randomly chosen value is smaller or equal to the range of cumulative stake for a specific leader
 func isSmallerorOrEqual(randomNumber, higher uint64) bool {
-	// If randomNumber is greater than the min and randomNumber is equal or smaller than
-	// the max, then randomNumber is within range
+
 	if randomNumber <= higher {
 		return true
 	} else {
@@ -328,12 +305,20 @@ func Hash(viewNumber uint64, data interface{}) [32]byte {
 	case uint64:
 		viewBytes := []byte(fmt.Sprintf("%d", data))
 		dataBytes = viewBytes
+	case nil:
+
 	default:
 		panic("invalid data type")
 	}
 	viewBytes := []byte(fmt.Sprintf("%d", viewNumber))
 	viewHash := sha256.Sum256(viewBytes)
-	combinedHash := sha256.Sum256(append(dataBytes, viewHash[:]...))
+	var combinedHash [32]byte
+
+	if dataBytes != nil {
+		combinedHash = sha256.Sum256(append(dataBytes, viewHash[:]...))
+	} else {
+		combinedHash = sha256.Sum256(viewHash[:])
+	}
 	return combinedHash
 }
 
@@ -386,7 +371,7 @@ type votesSeen struct {
 // timeouts for the current view.
 
 // Rev: We don't know if the current view of the node is the current view of majority of the network.
-// It is map of the hash(block.view, block.hash) to map string (timeoutMessage.ValidatorPublickey)
+// It is map of the hash(timeout.view) to map string (timeoutMessage.ValidatorPublickey)
 type TimeoutsSeenMap struct {
 	Timeout map[[32]byte]map[string]TimeoutMessage
 }
@@ -752,6 +737,7 @@ func validateVote(vote VoteMessage, node *Node, safeblocks *SafeBlockMap) bool {
 
 	// Make sure that the validator is registered.
 	if !verifyValidatorPublicKey(vote.ValidatorPublicKey, node.PubKeys) {
+		fmt.Println("publickey is not in the linst")
 		return false
 	}
 
@@ -782,9 +768,12 @@ func ComputeStake(messages interface{}, pubKeyToStake map[string]uint64) uint64 
 			}
 		}
 	case map[string]TimeoutMessage:
+		fmt.Println("Timeout msg map is ", m)
 		for _, timeout := range m {
 			if stake, exists := pubKeyToStake[string(timeout.ValidatorPublicKey)]; exists {
 				totalStake += stake
+				fmt.Println("Adding Stake is ", stake)
+
 			}
 		}
 	}
@@ -966,7 +955,7 @@ func validateTimeout(timeout TimeoutMessage, node *Node) bool {
 	}
 
 	// Verify the validator signature
-	payload := Hash(timeout.View, timeout.HighQC.View)
+	payload := Hash(timeout.View, nil)
 	if !VerifySignature(payload, timeout.ValidatorPublicKey, timeout.PartialTimeoutViewSignature) {
 		return false
 	}
@@ -1022,7 +1011,7 @@ func GetTimeouthighQcViews(timeoutSeen map[string]TimeoutMessage) []uint64 {
 
 // The handleTimeoutMessageFromPeer is called whenever we receive a timeout
 // from a peer.
-func F(timeoutMsg TimeoutMessage, node *Node, timeoutseen TimeoutsSeenMap) {
+func handleTimeoutMessageFromPeer(timeoutMsg TimeoutMessage, node *Node, timeoutseen TimeoutsSeenMap) {
 
 	// If we're not the leader, ignore all timeout messages.
 	if !node.AmIaLeader(timeoutMsg.View) {
@@ -1033,6 +1022,7 @@ func F(timeoutMsg TimeoutMessage, node *Node, timeoutseen TimeoutsSeenMap) {
 	// its signatures, including those for its HighQC. We also run a check to make
 	// sure we didn’t already receive a timeout or another vote from this peer.
 	if !validateTimeout(timeoutMsg, node) {
+		fmt.Println("Timeout is not valid")
 		return
 	}
 
