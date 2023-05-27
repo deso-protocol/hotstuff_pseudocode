@@ -484,7 +484,6 @@ func (node *Node) commitChainFromGrandParent(block *Block, safeblocks *SafeBlock
 
 		committedBlocks.Block[blockHash] = block
 		node.LatestCommittedView = view
-		fmt.Println("adding blocks to committed block map, ", block)
 	}
 }
 
@@ -510,26 +509,17 @@ func sanityCheckBlock(block Block, node *Node) bool {
 	// would simply not process the future block until downloading and processing the
 	// previous block referred to by its QC.
 	if block.View < node.CurView {
-		fmt.Println("View is smaller than currView")
 		return false
 	}
 
 	if block.View <= node.Last_voted_view {
 		//Have already voted for the block.
-		fmt.Println("View is smaller than node.Last_voted_view")
-
 		return false
 	}
 
 	// Check that the block's proposer is the expected leader for the current view.
 	leader, _ := computeLeader(block.View, node.PubKeyToStake)
 	if !block.ProposerPublicKey.Equals(PublicKey(leader)) {
-		fmt.Println("proposer key is different")
-		fmt.Println("block.ProposerPublicKey is ", string(block.ProposerPublicKey))
-		fmt.Println("Computed pubkey for leader is ", string(leader))
-		fmt.Println("Computed pubkey above is for the view", block.View)
-		fmt.Println(" pubkey to stake mape in the main is", node.PubKeyToStake)
-
 		return false
 	}
 
@@ -651,7 +641,6 @@ func handleBlockFromPeer(block *Block, node *Node, safeblocks *SafeBlockMap, com
 	// Make sure that the block contains a valid QC, signature, transactions,
 	// and that it's for the current view.
 	if !sanityCheckBlock(*block, node) {
-		fmt.Println("Failed inside sanity check")
 		return
 	}
 
@@ -688,7 +677,6 @@ func handleBlockFromPeer(block *Block, node *Node, safeblocks *SafeBlockMap, com
 	if safeVote {
 		// Construct the vote message. The vote will contain the validator's
 		// signature on the <view, blockHash> pair.
-		fmt.Println("Inside safeVote!!!!!!!!!!!!ln")
 		payload := Hash(block.View, block.Txns)
 		blockHashSignature, _ := Sign(payload, *node.PrivKey)
 
@@ -699,16 +687,13 @@ func handleBlockFromPeer(block *Block, node *Node, safeblocks *SafeBlockMap, com
 			PartialViewBlockHashSignature: blockHashSignature,
 		}
 		// Send the vote directly to the next leader.
-		//	fmt.Print("Pubkey to stake is", node.PubKeyToStake)
 		leader, _ := computeLeader(node.CurView+1, node.PubKeyToStake)
 		Send(voteMsg, PublicKey(leader))
 		// We can now proceed to the next view.
 		node.AdvanceView(block)
-		fmt.Println("View is advanced for the block ", block.View)
 		node.Last_voted_view = uint64(math.Max(float64(node.Last_voted_view), float64(node.CurView)))
 
 		// Add the block to the safeblocks struct.
-		fmt.Println("putting block, ", *block)
 		safeblocks.Put(block)
 	}
 
@@ -737,7 +722,6 @@ func validateVote(vote VoteMessage, node *Node, safeblocks *SafeBlockMap) bool {
 
 	// Make sure that the validator is registered.
 	if !verifyValidatorPublicKey(vote.ValidatorPublicKey, node.PubKeys) {
-		fmt.Println("publickey is not in the linst")
 		return false
 	}
 
@@ -768,11 +752,9 @@ func ComputeStake(messages interface{}, pubKeyToStake map[string]uint64) uint64 
 			}
 		}
 	case map[string]TimeoutMessage:
-		fmt.Println("Timeout msg map is ", m)
 		for _, timeout := range m {
 			if stake, exists := pubKeyToStake[string(timeout.ValidatorPublicKey)]; exists {
 				totalStake += stake
-				fmt.Println("Adding Stake is ", stake)
 
 			}
 		}
@@ -999,6 +981,7 @@ func GetHighestViewHighQC(timeoutSeen map[string]TimeoutMessage) QuorumCertifica
 
 	return highestHighQC
 }
+
 func GetTimeouthighQcViews(timeoutSeen map[string]TimeoutMessage) []uint64 {
 	views := []uint64{}
 
@@ -1022,7 +1005,6 @@ func handleTimeoutMessageFromPeer(timeoutMsg TimeoutMessage, node *Node, timeout
 	// its signatures, including those for its HighQC. We also run a check to make
 	// sure we didn’t already receive a timeout or another vote from this peer.
 	if !validateTimeout(timeoutMsg, node) {
-		fmt.Println("Timeout is not valid")
 		return
 	}
 

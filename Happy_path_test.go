@@ -1,7 +1,6 @@
 package hotstuff_pseudocode
 
 import (
-	"fmt"
 	"testing"
 )
 
@@ -111,7 +110,6 @@ func TestHandleBlockFromPeer(t *testing.T) {
 	txns = GenerateTxns(3)
 	output, _ := computeLeader(1, node.PubKeyToStake)
 	block1 := Block{Txns: txns, View: 1, ProposerPublicKey: PublicKey(output)}
-	fmt.Println("Computed leader for block in the test ", string(block1.ProposerPublicKey))
 
 	qc1 := QuorumCertificate{
 		View:                           0,
@@ -122,7 +120,7 @@ func TestHandleBlockFromPeer(t *testing.T) {
 	txns = GenerateTxns(3)
 	leader, _ := computeLeader(2, node.PubKeyToStake)
 	block2 := Block{Txns: txns, View: 2, ProposerPublicKey: PublicKey(leader)}
-	fmt.Println("Computed leader for block in the test", string(block2.ProposerPublicKey))
+
 	qc2 := QuorumCertificate{
 		View:                           1,
 		BlockHash:                      Hash(block1.View, block1.Txns),
@@ -138,7 +136,6 @@ func TestHandleBlockFromPeer(t *testing.T) {
 	leader, _ = computeLeader(3, node.PubKeyToStake)
 
 	block3 := Block{Txns: txns, View: 3, ProposerPublicKey: PublicKey(leader)}
-	fmt.Println("Computed leader for block in the test", string(block3.ProposerPublicKey))
 
 	qc3 := QuorumCertificate{
 		View:                           2,
@@ -148,17 +145,9 @@ func TestHandleBlockFromPeer(t *testing.T) {
 	block3.SetQC(&qc3)
 
 	// Handle the three blocks from peers
-	fmt.Println("PubkeyToStake map inside test is ", node.PubKeyToStake)
-	fmt.Println("handling block 1 ", block1)
-	fmt.Println("Block1.view inside test is ", block1.View)
+
 	handleBlockFromPeer(&block1, node, safeBlocks, committedBlocks)
-	fmt.Println("handling block 2 ", block2)
-	fmt.Println("Block1.view inside test is ", block2.View)
-
 	handleBlockFromPeer(&block2, node, safeBlocks, committedBlocks)
-	fmt.Println("handling block 3 ", block3)
-	fmt.Println("Block1.view inside test is ", block3.View)
-
 	handleBlockFromPeer(&block3, node, safeBlocks, committedBlocks)
 	// Verify that block1 is in the committed block map
 	//if !committedBlocks.Contains(block1.Hash()) {

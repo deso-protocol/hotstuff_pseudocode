@@ -109,6 +109,94 @@ func TestAppendTimeoutMessage(t *testing.T) {
 	}
 }
 
+func TestGetHighestViewHighQC(t *testing.T) {
+	// Create a map of timeout messages with different high QCs
+	timeoutSeen := map[string]TimeoutMessage{
+		"timeout1": {
+			HighQC: QuorumCertificate{
+				View: 1,
+			},
+		},
+		"timeout2": {
+			HighQC: QuorumCertificate{
+				View: 2,
+			},
+		},
+		"timeout3": {
+			HighQC: QuorumCertificate{
+				View: 3,
+			},
+		},
+	}
+
+	// Call the function under test
+	highestHighQC := GetHighestViewHighQC(timeoutSeen)
+
+	// Check the result
+	expectedView := uint64(3)
+	//expectedBlockHash := []byte("block3")
+	if highestHighQC.View != expectedView {
+		t.Errorf("Expected highest view to be %d, but got %d", expectedView, highestHighQC.View)
+	}
+
+}
+
+func TestGetTimeouthighQcViews(t *testing.T) {
+	// Create a map of timeout messages with different high QCs
+	timeoutSeen := map[string]TimeoutMessage{
+		"timeout1": {
+			HighQC: QuorumCertificate{
+				View: 1,
+			},
+		},
+		"timeout2": {
+			HighQC: QuorumCertificate{
+				View: 2,
+			},
+		},
+		"timeout3": {
+			HighQC: QuorumCertificate{
+				View: 3,
+			},
+		},
+	}
+
+	// Call the function under test
+	views := GetTimeouthighQcViews(timeoutSeen)
+
+	// Check the result
+	expectedViews := []uint64{1, 2, 3}
+	if len(views) != len(expectedViews) {
+		t.Errorf("Expected %d views, but got %d views", len(expectedViews), len(views))
+	}
+
+	for _, view := range expectedViews {
+		found := false
+		for _, v := range views {
+			if v == view {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Expected view %d not found in the result", view)
+		}
+	}
+}
+
+func TestGetTimeouthighQcViews_EmptyMap(t *testing.T) {
+	// Create an empty map of timeout messages
+	timeoutSeen := map[string]TimeoutMessage{}
+
+	// Call the function under test
+	views := GetTimeouthighQcViews(timeoutSeen)
+
+	// Check the result
+	if len(views) != 0 {
+		t.Errorf("Expected 0 views, but got %d views", len(views))
+	}
+}
+
 func TestHandleTimeoutMessagesForBlockCreation(t *testing.T) {
 	txns := GenerateTxns(3)
 
@@ -175,10 +263,7 @@ func TestHandleTimeoutMessagesForBlockCreation(t *testing.T) {
 	//AppendTimeoutMessage(&timeoutsSeen, timeoutMsg3)
 
 	// Save the initial timeoutStake
-	fmt.Println("timeoutsSeen.Timeout is ", timeoutsSeen.Timeout)
-	initialTimeoutStake := ComputeStake(timeoutsSeen.Timeout[Hash(timeoutMsg1.View, nil)], node.PubKeyToStake)
-	fmt.Println("Intial Timeout Stake is ", initialTimeoutStake)
-	// Call handleTimeoutMessageFromPeer to create a block with an aggregated QC
+	//	// Call handleTimeoutMessageFromPeer to create a block with an aggregated QC
 	handleTimeoutMessageFromPeer(timeoutMsg1, node, timeoutsSeen)
 	handleTimeoutMessageFromPeer(timeoutMsg2, node, timeoutsSeen)
 	handleTimeoutMessageFromPeer(timeoutMsg3, node, timeoutsSeen)
@@ -187,7 +272,6 @@ func TestHandleTimeoutMessagesForBlockCreation(t *testing.T) {
 	//fmt.Println("TImeoutSeen map is after adding 3 timeout msgs  is ", timeoutsSeen.Timeout)
 	// Verify if the timeoutStake has increased
 	updatedTimeoutStake := ComputeStake(timeoutsSeen.Timeout[Hash(timeoutMsg1.View, nil)], node.PubKeyToStake)
-	fmt.Println("updated Timeout Stake is ", updatedTimeoutStake)
 
 	if updatedTimeoutStake != 1000 {
 		t.Errorf("InvalTimeout stake")
@@ -215,10 +299,8 @@ func TestHandleTimeoutMessagesForBlockCreation(t *testing.T) {
 	safeblocks.Put(&genesisBlock)
 
 	handleBlockFromPeer(&block, node, safeblocks, committedblocks)
-	fmt.Println("Safe blocks map is ", safeblocks)
 
 	// Check if the block is in the safe blocks
-	fmt.Println("Hash block.view and block.txns is ", Hash(block.View, block.Txns))
 	if ok, _ := Contains(safeblocks.Blocks, Hash(block.View, block.Txns)); !ok {
 		t.Errorf("Block not found in safe blocks")
 	}
