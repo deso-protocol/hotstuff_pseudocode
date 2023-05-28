@@ -56,6 +56,7 @@ type Node struct {
 	LatestCommittedView uint64
 	Last_voted_view     uint64
 	PubKeyToStake       map[string]uint64
+	Timer               *Timer
 }
 
 // For the purposes of this code, we will assume that PublicKey and PrivateKey can
@@ -225,9 +226,6 @@ func VerifySignature(hash [32]byte, publicKey PublicKey, signature []byte) bool 
 // ResetTimeout() resets timer for a specific duration. Duration is the funciton of the number of times
 // the protocol observed failure. But it should be capped and grandually decreased to a normal acceptable
 // value.
-func (node *Node) ResetTimeout() {
-
-}
 
 func computeLeader(view uint64, pubKeyToStake map[string]uint64) (string, error) {
 
@@ -326,40 +324,6 @@ func (pk PublicKey) Equals(other PublicKey) bool {
 	return bytes.Equal(pk, other)
 }
 
-// TimoutDuration This function returns the duration. It should be noted that duration can be calculated as
-// the function of number of failures.
-
-// === Some local variables ===
-
-// The current validator's public and private keys, which should have been registered
-// previously, and which should have stake allocated to them as well.
-
-// The timeout value is initially set to thirty seconds, and then doubled
-// for each consecutive timeout the node experiences, which allows for other nodes
-// to catch up in the event of a network disruption.
-
-// I think this is too much detail for spec. You can decide on how to do it during implementation.
-//var timeoutSeconds = GetInitialTimeout()
-
-// The highest QC that this node has seen so far. This is tracked so that the
-// node can know when a block can be finalized, and so that the highest QC can
-// be sent to the leader in the event of a timeout.
-
-// The networkChannel variable is a wrapper around peer connections. We will use
-// it as an abstraction in this pseudocode to send and receive messages from
-// other peers. For simplicity, we skip the implementation details of the p2p
-// connections.
-
-//networkChannel = ConnectToPeers()
-
-// The currentView variable stores the view that this node is currently on. We use the
-// GetCurrentView() value in this pseudode instead of starting with 0 because
-// we assume the network is in steady-state, rather than starting from the
-// initial conditions, and we leave out all the details of getting in sync with
-// other peers here as well.
-
-// The votesSeen variable stores a map of vote messages seen by the leader in the
-// current view. We will make sure this map only stores votes for the currentView.
 // Rev: We don't know if the current view of the node is the current view of majority of the network.
 // It is map of the hash(block.view, block.hash) to map string (vote.voter)
 type votesSeen struct {
@@ -411,8 +375,9 @@ func (node *Node) AdvanceView(block *Block) {
 		node.CurView = block.AggregateQC.View + 1
 
 	}
+	fmt.Println("node.Timer is", *node.Timer)
 
-	node.ResetTimeout()
+	node.Timer.Reset()
 }
 
 // This functions is used to get index  of the signer of QC in the bitmap.
@@ -489,25 +454,6 @@ func (node *Node) commitChainFromGrandParent(block *Block, safeblocks *SafeBlock
 
 // sanityCheckBlock is used to verify that the block contains valid information.
 func sanityCheckBlock(block Block, node *Node) bool {
-	// Make sure the block is for the current view.
-	//
-	// Notice that with this code it is technically possible to receive a valid block
-	// that has a view *less* than the current one. This can happen in a case where
-	// you timeout, advance the view, and then it turns out that the block you
-	// timed out on was able to form a QC. This is a general class of issues that is resolved
-	// with block caching logic that is not included in this pseudocode. Generally,
-	// you can assume that these situations where you receive a block from a previous
-	// view are handled by the caching logic. The caching logic would need to essentially
-	// do all of the same checks as we do here, but skip the checks that are specific to the
-	// current view.
-	//
-	// In addition, it is possible to receive a block that is *ahead* of your current
-	// view. This can happen in a case where the leader for the current view was able
-	// to form a QC without your vote, before you were able to receive the block. Again
-	// this is a general class of issues that is resolved with block caching logic that
-	// is not included here. This case is simpler than the previous case because you
-	// would simply not process the future block until downloading and processing the
-	// previous block referred to by its QC.
 	if block.View < node.CurView {
 		return false
 	}
@@ -886,11 +832,15 @@ func (t *Timer) Stop() {
 	}
 }
 
+// After a successful view Reset() is called. Number of retries is 0 so that we get the base duration when
+// getDuration() is called.
 func (t *Timer) Reset() {
 	t.Stop()
+	t.retries = 0
 	t.timer.Reset(t.getDuration())
 }
 
+// Duration gets doubled each time when onTimeout(). It's function of the number of retries.
 func (t *Timer) onTimeout(node *Node) {
 
 	t.retries = t.retries + 1
@@ -900,6 +850,7 @@ func (t *Timer) onTimeout(node *Node) {
 	Send(timeoutMsg, PublicKey(leader))
 	//To avoid voting in this view.
 	node.Last_voted_view = uint64(math.Max(float64(node.Last_voted_view), float64(node.CurView)))
+	t.Stop()
 	t.Start(node)
 }
 

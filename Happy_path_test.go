@@ -2,6 +2,7 @@ package hotstuff_pseudocode
 
 import (
 	"testing"
+	"time"
 )
 
 func NewSafeBlockMap() *SafeBlockMap {
@@ -106,6 +107,14 @@ func TestHandleBlockFromPeer(t *testing.T) {
 		},
 	}
 
+	timer := NewTimer(1 * time.Second)
+
+	// Assign the timer to node.Timer
+	node.Timer = timer
+	//fmt.Println("node.Timer is", *node.Timer)
+
+	// Start the timer
+	node.Timer.Start(node)
 	// Create three blocks with the appropriate QC
 	txns = GenerateTxns(3)
 	output, _ := computeLeader(1, node.PubKeyToStake)
