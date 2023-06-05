@@ -505,9 +505,6 @@ func validateQuorumCertificate(qc QuorumCertificate) bool {
 	// Make sure that the BlockHash in the qc matches our local BlockHash history.
 	//Rev: It is not possible to have a valid quorum certificate and different blockchain history
 	// Hence, this check is not necessary.
-	//if GetBlockHashForView(qc.View) != qc.BlockHash {
-	//	return false
-	//	}
 
 	return true
 }
@@ -528,16 +525,6 @@ func validateTimeoutProof(aggregateQC AggregateQC, pubkeys []PublicKey) bool {
 	// Rev: Don't need to iterate over all the signatures. Just verify the highQC and the
 	// aggregated signature of the aggregatedQC.
 	highestQCView := uint64(0)
-	//var payloads [][]byte
-	//var highestQCView uint64
-	//for ii := 0; ii < len(aggregateQC.ValidatorTimeoutHighQCViews); ii++ {
-	//	payload := Hash(aggregateQC.View, aggregateQC.ValidatorTimeoutHighQCViews[ii])
-	//	payloads = append(payloads, payload)
-	//
-	//	if aggregateQC.ValidatorTimeoutHighQCViews[ii] > highestQCView {
-	//		highestQCView = aggregateQC.ValidatorTimeoutHighQCViews[ii]
-	//	}
-	//}
 
 	// The highest QC view found in the signatures should match the highest view
 	// of the HighestQC included in the AggregateQC.
@@ -799,10 +786,6 @@ func handleVoteMessageFromPeer(vote *VoteMessage, node *Node, safeblocks *SafeBl
 
 	// Sign the block using the leader’s private key.
 	block.ProposerSignature, _ = Sign(Hash(block.View, block.Txns), *node.PrivKey)
-	// Blast the block to everyone including yourself. This means we'll process
-	// this block in handleBlockFromPeer, where we'll also update our highestQC and
-	// advance to the next view. As such, there is no reason to
-	// call ResetTimeoutAndAdvanceView() here.
 	broadcast(block)
 }
 
@@ -980,7 +963,6 @@ func handleTimeoutMessageFromPeer(timeoutMsg TimeoutMessage, node *Node, timeout
 	// validatorHighQCs.
 	highQC := GetHighestViewHighQC((timeoutseen).Timeout[Hash(timeoutMsg.View, nil)])
 	views := GetTimeouthighQcViews((timeoutseen).Timeout[Hash(timeoutMsg.View, nil)])
-	//highQC, timeoutHighQCViews, timeoutHighQCCombinedSigs := FormatTimeoutQCs(timeoutsSeenMap)
 	// Construct the AggregateQC for this view.
 	aggregateQC := AggregateQC{
 		View:                               timeoutMsg.View,
@@ -1007,54 +989,3 @@ func handleTimeoutMessageFromPeer(timeoutMsg TimeoutMessage, node *Node, timeout
 	// advance to the next view.
 	broadcast(block)
 }
-
-// This is the node's main message and event handling loop. We continuously loop,
-// incrementing the view with each round.
-////*
-//func StartConsensus() {
-//	// We run an infinite loop, and process each message from our peers as it
-//	// comes in. Note that the timeout is also something we might process as
-//	// part of this main loop. If you are unfamiliar with the concept of a "select"
-//	// statement, we recommend referencing Go's implementation here:
-//	// - https://golangdocs.com/select-statement-in-golang
-//	for {
-//		select {
-//		case messageFromPeer := <-networkChannel.WaitForMessage():
-//			if messageFromPeer.MessageType() == BlockMessageType {
-//				handleBlockFromPeer(messageFromPeer)
-//
-//			} else if messageFromPeer.MessageType() == VoteMessageType {
-//				handleVoteMessageFromPeer(messageFromPeer)
-//
-//			} else if messageFromPeer.MessageType() == TimeoutMessageType {
-//				handleTimeoutMessageFromPeer(messageFromPeer)
-//
-//			}
-//		case <-WaitForTimeout():
-//			// WaitForTimeout() is a function that will emit a value
-//			// whenever a timeout is triggered, causing us to enter this part
-//			// of the code. It can be assumed that calling
-//			// ResetTimeout(timeoutValue) will cause WaitForTimeout() to emit
-//			// a value after timeoutValue seconds have elapsed (ignoring all
-//			// previous calls to ResetTimeout()).
-//
-//			// Construct the timeout message
-//			timeoutMsg := TimeoutMessage{
-//				ValidatorPublicKey:          myPublicKey,
-//				TimeoutView:                 currentView,
-//				HighQC:                      highestQC,
-//				PartialTimeoutViewSignature: Sign(Hash(currentView, highestQC.View), myPrivateKey),
-//			}
-//
-//			// Send the timeout message and send it to the next leader .
-//			Send(timeoutMsg, computeLeader(currentView+1))
-//
-//			// We use exponential backoff for timeouts in this reference
-//			// implementation.
-//			ResetTimeoutAndAdvanceView(2 * timeoutSeconds)
-//		case <-WaitForQuitSignal():
-//			Exit()
-//		}
-//	}
-//}
-//*/
