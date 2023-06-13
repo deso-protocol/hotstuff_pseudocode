@@ -25,7 +25,7 @@ func TestTimer(t *testing.T) {
 		},
 		PubKey:              (*PublicKey)(&leaderPubKey),
 		PrivKey:             (*PrivateKey)(&leaderPrivKey),
-		PubKeys:             make([]PublicKey, 2),
+		ValidatorPubKeys:    make([]PublicKey, 2),
 		LatestCommittedView: 0,
 		Last_voted_view:     0,
 		PubKeyToStake:       make(map[string]uint64),
@@ -72,10 +72,10 @@ func TestAppendTimeoutMessage(t *testing.T) {
 			BlockHash:                      Hash(genesisBlock.View, genesisBlock.Txns),
 			CombinedViewBlockHashSignature: BLSMultiSignature{CombinedSignature: []byte("a"), ValidatorIDBitmap: []byte("a")},
 		},
-		PubKeys:         []PublicKey{{}},
-		PrivKey:         (*PrivateKey)(&leaderPrivKey),
-		Last_voted_view: 0,
-		PubKey:          (*PublicKey)(&leaderPubKey),
+		ValidatorPubKeys: []PublicKey{{}},
+		PrivKey:          (*PrivateKey)(&leaderPrivKey),
+		Last_voted_view:  0,
+		PubKey:           (*PublicKey)(&leaderPubKey),
 		PubKeyToStake: map[string]uint64{
 			string(leaderPubKey): 100,
 			"pubKey2":            200,
@@ -85,7 +85,7 @@ func TestAppendTimeoutMessage(t *testing.T) {
 	}
 
 	for key := range node.PubKeyToStake {
-		node.PubKeys = append(node.PubKeys, []byte(key))
+		node.ValidatorPubKeys = append(node.ValidatorPubKeys, []byte(key))
 	}
 	timeoutsSeen := TimeoutsSeenMap{
 		Timeout: make(map[[32]byte]map[string]TimeoutMessage),
@@ -210,10 +210,10 @@ func TestHandleTimeoutMessagesForBlockCreation(t *testing.T) {
 			BlockHash:                      Hash(genesisBlock.View, genesisBlock.Txns),
 			CombinedViewBlockHashSignature: BLSMultiSignature{CombinedSignature: []byte("a"), ValidatorIDBitmap: []byte("a")},
 		},
-		PubKeys:         []PublicKey{},
-		PrivKey:         (*PrivateKey)(&leaderPrivKey),
-		Last_voted_view: 0,
-		PubKey:          (*PublicKey)(&leaderPubKey),
+		ValidatorPubKeys: []PublicKey{},
+		PrivKey:          (*PrivateKey)(&leaderPrivKey),
+		Last_voted_view:  0,
+		PubKey:           (*PublicKey)(&leaderPubKey),
 		PubKeyToStake: map[string]uint64{
 			"pubKey1": 100,
 			"pubKey2": 200,
@@ -230,9 +230,9 @@ func TestHandleTimeoutMessagesForBlockCreation(t *testing.T) {
 	// Start the timer
 	node.Timer.Start(node)
 	for key := range node.PubKeyToStake {
-		node.PubKeys = append(node.PubKeys, []byte(key))
+		node.ValidatorPubKeys = append(node.ValidatorPubKeys, []byte(key))
 	}
-	fmt.Println("Pubkeys are ", node.PubKeys)
+	fmt.Println("Pubkeys are ", node.ValidatorPubKeys)
 	// Create a map to store the timeout messages
 	timeoutsSeen := TimeoutsSeenMap{
 		Timeout: make(map[[32]byte]map[string]TimeoutMessage),
@@ -240,7 +240,7 @@ func TestHandleTimeoutMessagesForBlockCreation(t *testing.T) {
 
 	// Create timeout messages from different public keys
 	timeoutMsg1 := TimeoutMessage{
-		ValidatorPublicKey:          node.PubKeys[0],
+		ValidatorPublicKey:          node.ValidatorPubKeys[0],
 		View:                        node.CurView + 1,
 		HighQC:                      *node.HighestQC,
 		PartialTimeoutViewSignature: []byte("signature1"),
@@ -248,7 +248,7 @@ func TestHandleTimeoutMessagesForBlockCreation(t *testing.T) {
 	//	AppendTimeoutMessage(&timeoutsSeen, timeoutMsg1)
 
 	timeoutMsg2 := TimeoutMessage{
-		ValidatorPublicKey:          node.PubKeys[1],
+		ValidatorPublicKey:          node.ValidatorPubKeys[1],
 		View:                        node.CurView + 1,
 		HighQC:                      *node.HighestQC,
 		PartialTimeoutViewSignature: []byte("signature2"),
@@ -256,14 +256,14 @@ func TestHandleTimeoutMessagesForBlockCreation(t *testing.T) {
 	//AppendTimeoutMessage(&timeoutsSeen, timeoutMsg2)
 
 	timeoutMsg3 := TimeoutMessage{
-		ValidatorPublicKey:          node.PubKeys[2],
+		ValidatorPublicKey:          node.ValidatorPubKeys[2],
 		View:                        node.CurView + 1,
 		HighQC:                      *node.HighestQC,
 		PartialTimeoutViewSignature: []byte("signature3"),
 	}
 
 	timeoutMsg4 := TimeoutMessage{
-		ValidatorPublicKey:          node.PubKeys[3],
+		ValidatorPublicKey:          node.ValidatorPubKeys[3],
 		View:                        node.CurView + 1,
 		HighQC:                      *node.HighestQC,
 		PartialTimeoutViewSignature: []byte("signature4"),

@@ -2,16 +2,13 @@ package hotstuff_pseudocode
 
 import (
 	"bytes"
-	//"crypto/rand"
-	"crypto/sha256"
-	"encoding/json"
+
 	"errors"
 	"fmt"
 	"math"
 	mrand "math/rand"
 	"reflect"
 	"sort"
-	"strconv"
 	"time"
 )
 
@@ -25,38 +22,22 @@ type BLSMultiSignature struct {
 	ValidatorIDBitmap []byte
 }
 
-// TxnMsg Just creating TxnMsg to avoid errors
-type TxnMsg struct {
-	From   string
-	To     string
-	Amount int
-}
-
-func GenerateTxns(n int) []TxnMsg {
-	mrand.Seed(time.Now().UnixNano())
-
-	var txns []TxnMsg
-	for i := 0; i < n; i++ {
-		txns = append(txns, TxnMsg{
-			From:   strconv.Itoa(mrand.Intn(1000)),
-			To:     strconv.Itoa(mrand.Intn(1000)),
-			Amount: mrand.Intn(100),
-		})
-	}
-	return txns
-}
-
 type Node struct {
 	Id                  int
 	CurView             uint64
 	HighestQC           *QuorumCertificate
 	PubKey              *PublicKey
 	PrivKey             *PrivateKey
-	PubKeys             []PublicKey
+	ValidatorPubKeys    []PublicKey
 	LatestCommittedView uint64
 	Last_voted_view     uint64
 	PubKeyToStake       map[string]uint64
 	Timer               *Timer
+}
+
+func (node Node) SetKeys(mypubkey PublicKey, myprivkey PrivateKey) {
+	node.PrivKey = &myprivkey
+	node.PubKey = &mypubkey
 }
 
 // For the purposes of this code, we will assume that PublicKey and PrivateKey can
@@ -116,14 +97,6 @@ type CommittedBlockMap struct {
 	Block map[[32]byte]*Block
 }
 
-func (aqc AggregateQC) isEmpty() bool {
-	if aqc.View == 0 && aqc.ValidatorCombinedTimeoutSignatures.CombinedSignature == nil {
-		return true
-
-	}
-	return false
-}
-
 // The TimeoutMessage is sent from a validator to the next leader when that
 // validator wants to timeout on a particular view. It contains the highest QC
 // that the validator is aware of. This QC then allows the leader to link back to
@@ -175,8 +148,7 @@ type AggregateQC struct {
 	// validators decided to timeout on.
 	View uint64
 
-	// The highest QC exctracted from all of the TimeoutMessages that the leader
-	// received.
+	// The highest QC extracted from all the TimeoutMessages that the leader received.
 	ValidatorTimeoutHighQC QuorumCertificate
 
 	// Here we include a list of the HighQC.View values we got from each of the
@@ -186,6 +158,14 @@ type AggregateQC struct {
 	//https://crypto.stanford.edu/~dabo/pubs/papers/BLSmultisig.html
 	ValidatorTimeoutHighQCViews        []uint64
 	ValidatorCombinedTimeoutSignatures BLSMultiSignature
+}
+
+func (aqc AggregateQC) isEmpty() bool {
+	if aqc.View == 0 && aqc.ValidatorCombinedTimeoutSignatures.CombinedSignature == nil {
+		return true
+
+	}
+	return false
 }
 
 type Block struct {
@@ -213,20 +193,9 @@ type Block struct {
 	ProposerSignature BLSPartialSignature
 }
 
-// Some  utility functions
-func (node Node) GetMyKeys(mypubkey PublicKey, myprivkey PrivateKey) {
-	node.PrivKey = &myprivkey
-	node.PubKey = &mypubkey
-}
-
-func VerifySignature(hash [32]byte, publicKey PublicKey, signature []byte) bool {
-	return true
-}
-
 // ResetTimeout() resets timer for a specific duration. Duration is the funciton of the number of times
 // the protocol observed failure. But it should be capped and grandually decreased to a normal acceptable
 // value.
-
 func computeLeader(view uint64, pubKeyToStake map[string]uint64) (string, error) {
 
 	comulativeStakeSlice, orderedpubkeys, _ := calculateCumulativeStakesSlice(pubKeyToStake)
@@ -289,35 +258,6 @@ func isSmallerorOrEqual(randomNumber, higher uint64) bool {
 	} else {
 		return false
 	}
-}
-
-func Hash(viewNumber uint64, data interface{}) [32]byte {
-	var dataBytes []byte
-	switch data.(type) {
-	case []TxnMsg:
-		txnBytes, err := json.Marshal(data)
-		if err != nil {
-			panic(err)
-		}
-		dataBytes = txnBytes
-	case uint64:
-		viewBytes := []byte(fmt.Sprintf("%d", data))
-		dataBytes = viewBytes
-	case nil:
-
-	default:
-		panic("invalid data type")
-	}
-	viewBytes := []byte(fmt.Sprintf("%d", viewNumber))
-	viewHash := sha256.Sum256(viewBytes)
-	var combinedHash [32]byte
-
-	if dataBytes != nil {
-		combinedHash = sha256.Sum256(append(dataBytes, viewHash[:]...))
-	} else {
-		combinedHash = sha256.Sum256(viewHash[:])
-	}
-	return combinedHash
 }
 
 func (pk PublicKey) Equals(other PublicKey) bool {
@@ -593,7 +533,7 @@ func handleBlockFromPeer(block *Block, node *Node, safeblocks *SafeBlockMap, com
 		// the block accordingly.
 
 		// First we make sure the block contains a valid AggregateQC.
-		validateTimeoutProof(block.AggregateQC, node.PubKeys)
+		validateTimeoutProof(block.AggregateQC, node.ValidatorPubKeys)
 		// We find the QC with the highest view among the QCs contained in the
 		// AggregateQC.
 		highestTimeoutQC := block.AggregateQC.ValidatorTimeoutHighQC
@@ -654,7 +594,7 @@ func validateVote(vote VoteMessage, node *Node, safeblocks *SafeBlockMap) bool {
 	}
 
 	// Make sure that the validator is registered.
-	if !verifyValidatorPublicKey(vote.ValidatorPublicKey, node.PubKeys) {
+	if !verifyValidatorPublicKey(vote.ValidatorPublicKey, node.ValidatorPubKeys) {
 		return false
 	}
 
@@ -861,7 +801,7 @@ func broadcast(block Block) {
 // /Needs to be redone
 func validateTimeout(timeout TimeoutMessage, node *Node) bool {
 	// Make sure that the validator is registered.
-	if !verifyValidatorPublicKey(timeout.ValidatorPublicKey, node.PubKeys) {
+	if !verifyValidatorPublicKey(timeout.ValidatorPublicKey, node.ValidatorPubKeys) {
 		return false
 	}
 
