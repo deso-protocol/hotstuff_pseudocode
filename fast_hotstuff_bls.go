@@ -453,6 +453,10 @@ func (node *Node) handleBlockFromPeer(block *Block) {
 
 	// If safeVote is true, we will vote on the block.
 	if safeVote {
+		// We update our local HighestQC if the block’s QC has a higher view.
+		if block.QC.View > node.HighestQC.View {
+			node.HighestQC = &(block.QC)
+		}
 		// Construct the vote message. The vote will contain the validator's
 		// signature on the <view, blockHash> pair.
 		payload := Hash(block.View, block.Txns)
@@ -464,11 +468,14 @@ func (node *Node) handleBlockFromPeer(block *Block) {
 			BlockHash:                     Hash(block.View, block.Txns),
 			PartialViewBlockHashSignature: blockHashSignature,
 		}
+
+		// We can now proceed to the next view.
+		node.AdvanceView(block)
+
 		// Send the vote directly to the next leader.
 		leader, _ := computeLeader(node.CurView+1, node.PubKeyToStake)
 		Send(voteMsg, PublicKey(leader))
-		// We can now proceed to the next view.
-		node.AdvanceView(block)
+
 		node.Last_voted_view = uint64(math.Max(float64(node.Last_voted_view), float64(node.CurView)))
 
 		// Add the block to the safeblocks struct.
@@ -576,7 +583,7 @@ func (node *Node) handleVoteMessageFromPeer(vote *VoteMessage) {
 	block := Block{
 		ProposerPublicKey: *node.PubKey,
 		Txns:              GenerateTxns(10),
-		View:              node.CurView,
+		View:              vote.View + 1,
 		QC:                qc,
 		AggregateQC: AggregateQC{
 			View:                               0,
@@ -639,7 +646,7 @@ func (node *Node) AppendTimeoutMessage(timeout TimeoutMessage) {
 func (node *Node) handleTimeoutMessageFromPeer(timeoutMsg TimeoutMessage) {
 
 	// If we're not the leader, ignore all timeout messages.
-	if !node.IsLeader(timeoutMsg.View) {
+	if !node.IsLeader(timeoutMsg.View + 1) {
 		return
 	}
 
@@ -685,7 +692,7 @@ func (node *Node) handleTimeoutMessageFromPeer(timeoutMsg TimeoutMessage) {
 	block := Block{
 		ProposerPublicKey: *node.PubKey,
 		Txns:              GenerateTxns(10),
-		View:              node.CurView,
+		View:              timeoutMsg.View + 1,
 		// Setting the QC is technically redundant when we have an AggregateQC but
 		// we set it anyway for convenience.
 		QC:          highQC,
@@ -765,12 +772,12 @@ func (t *Timer) Reset() {
 func (t *Timer) onTimeout(node *Node) {
 
 	t.retries = t.retries + 1
-	node.CurView = node.CurView + 1
 	timeoutMsg := t.CreateTimeout_msg(node)
 	leader, _ := computeLeader(node.CurView+1, node.PubKeyToStake)
 	Send(timeoutMsg, PublicKey(leader))
 	//To avoid voting in this view.
 	node.Last_voted_view = uint64(math.Max(float64(node.Last_voted_view), float64(node.CurView)))
+	node.CurView = node.CurView + 1
 	t.Stop()
 	t.Start(node)
 }
