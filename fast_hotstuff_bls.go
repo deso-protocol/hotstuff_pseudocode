@@ -619,15 +619,33 @@ func handleBlockFromPeer(block *Block, node *Node, safeblocks *SafeBlockMap, com
 			BlockHash:                     Hash(block.View, block.Txns),
 			PartialViewBlockHashSignature: blockHashSignature,
 		}
+		// We can now proceed to the next view.
+		//
+		// NOTE(diamondhands):
+		// Calling AdvanceView() updates our CurView to be equal to block.QC.View + 1,
+		// which is basically equivalent to block.View. Because of this, we need to do
+		// it *before* we call computeLeader(node.CurView+1, node.PubKeyToStake), which
+		// I moved to AFTER the call of AdvanceView. If we don't make this change, I think
+		// that we would be effectively calling computeLeader(previousBlock.View+1) rather
+		// than computeLeader(block.View+1), the latter of which is what we want.
+		node.AdvanceView(block)
 		// Send the vote directly to the next leader.
 		leader, _ := computeLeader(node.CurView+1, node.PubKeyToStake)
 		Send(voteMsg, PublicKey(leader))
-		// We can now proceed to the next view.
-		node.AdvanceView(block)
 		node.Last_voted_view = uint64(math.Max(float64(node.Last_voted_view), float64(node.CurView)))
 
 		// Add the block to the safeblocks struct.
 		safeblocks.Put(block)
+
+		// In this case we update the HighestQC to the block's QC.
+		//
+		// NOTE(diamondhands): Before I added this here, we were only updating the
+		// node.HighestQC in a timeout scenario (i.e. when we had !AggregateQC.isEmpty()).
+		// However, I think we need to set it every time we get a block that is safe to
+		// vote on. Maybe even regardless of whether we vote on it or not.
+		if block.QC.View > node.HighestQC.View {
+			node.HighestQC = &(block.QC)
+		}
 	}
 
 	// Our commit rule relies on the fact that blocks were produced without timeouts.
@@ -774,8 +792,17 @@ func handleVoteMessageFromPeer(vote *VoteMessage, node *Node, safeblocks *SafeBl
 	block := Block{
 		ProposerPublicKey: *node.PubKey,
 		Txns:              GenerateTxns(10),
-		View:              node.CurView,
-		QC:                qc,
+		// NOTE(diamondhands): Before, we were setting this to node.CurView. But I think this
+		// was incorrect. In particular, node.CurView will generally be set to
+		// previousBlock.QC+1 via AdvanceView(), which is the only place we modify it. As
+		// a result, if we set the block's view to node.CurView, then we would never
+		// actually increment the view! So I think, at minimum, this value should be set
+		// to node.CurView+1. But rather than depend on CurView, it seems better to just
+		// set it to vote.View+1, or equivalently qc.View+1. I prefer the latter because it's
+		// what handleVoteMessageFromPeer() explicitly checks in order to determine whether
+		// or not to vote on a block.
+		View: qc.View + 1,
+		QC:   qc,
 		AggregateQC: AggregateQC{
 			View:                               0,
 			ValidatorTimeoutHighQC:             QuorumCertificate{},
@@ -931,7 +958,13 @@ func GetTimeouthighQcViews(timeoutSeen map[string]TimeoutMessage) []uint64 {
 func handleTimeoutMessageFromPeer(timeoutMsg TimeoutMessage, node *Node, timeoutseen TimeoutsSeenMap) {
 
 	// If we're not the leader, ignore all timeout messages.
-	if !node.AmIaLeader(timeoutMsg.View) {
+	// NOTE(diamondhands): Before, this was checking timeoutMsg.View rather than
+	// timeoutMsg.View+1. This seemed wrong because the view number in the
+	// timeoutMsg is the view number that the validator is timing out in, which
+	// will become the QC view rather than the block's view. This fix causes a
+	// direct parallelism to the handleVoteMessageFromPeer function as well, where
+	// we check vote.View+1.
+	if !node.AmIaLeader(timeoutMsg.View + 1) {
 		return
 	}
 
@@ -975,7 +1008,11 @@ func handleTimeoutMessageFromPeer(timeoutMsg TimeoutMessage, node *Node, timeout
 	block := Block{
 		ProposerPublicKey: *node.PubKey,
 		Txns:              GenerateTxns(10),
-		View:              node.CurView,
+		// NOTE(diamondhands): See my comment in handleVoteMessageFromPeer where we
+		// set block.View. I think the exact same logic applies here. Notice that you
+		// could alternatively set this to timeoutMsg.View + 1, but I think this is
+		// a bit clearer because it's what is checked explicilty by safeVote.
+		View: aggregateQC.View + 1,
 		// Setting the QC is technically redundant when we have an AggregateQC but
 		// we set it anyway for convenience.
 		QC:          highQC,
