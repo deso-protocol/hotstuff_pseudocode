@@ -70,7 +70,7 @@ func TestAppendTimeoutMessage(t *testing.T) {
 		HighestQC: &QuorumCertificate{
 			View:                           0,
 			BlockHash:                      Hash(genesisBlock.View, genesisBlock.Txns),
-			CombinedViewBlockHashSignature: BLSMultiSignature{CombinedSignature: []byte("a"), ValidatorIDBitmap: []byte("a")},
+			CombinedViewBlockHashSignature: BLSMultiSignature{CombinedSignature: []byte("a"), ValidatorIDBitmap: []byte{1}},
 		},
 		ValidatorPubKeys: []PublicKey{{}},
 		PrivKey:          (*PrivateKey)(&leaderPrivKey),
@@ -88,18 +88,21 @@ func TestAppendTimeoutMessage(t *testing.T) {
 		node.ValidatorPubKeys = append(node.ValidatorPubKeys, []byte(key))
 	}
 	timeoutsSeen := TimeoutsSeenMap{
-		Timeout: make(map[[32]byte]map[string]TimeoutMessage),
+		Timeouts: make(map[[32]byte]map[string]TimeoutMessage),
 	}
 
 	timer := NewTimer(2 * time.Second)
 
 	timeoutMsg := timer.CreateTimeout_msg(node)
+	// We set view to 7 because that's when the current node happens to be the leader.
+	timeoutMsg.View = 7
 
 	fmt.Println("timeout msg is ", timeoutMsg)
-	handleTimeoutMessageFromPeer(*timeoutMsg, node, timeoutsSeen)
+	node.timeoutsSeen = timeoutsSeen
+	node.handleTimeoutMessageFromPeer(*timeoutMsg)
 
 	// Assert that the timeout message was appended to timeoutsSeen
-	innerMap, ok := timeoutsSeen.Timeout[Hash(timeoutMsg.View, nil)]
+	innerMap, ok := node.timeoutsSeen.Timeouts[Hash(timeoutMsg.View, nil)]
 	if !ok {
 		t.Errorf("Inner map not found for hash %s", Hash(timeoutMsg.View, nil))
 	}
@@ -204,11 +207,11 @@ func TestHandleTimeoutMessagesForBlockCreation(t *testing.T) {
 	leaderPrivKey := []byte("leader priv key")
 	genesisBlock := Block{Txns: txns, View: 0}
 	node := &Node{
-		CurView: 0,
+		CurView: 6,
 		HighestQC: &QuorumCertificate{
 			View:                           0,
 			BlockHash:                      Hash(genesisBlock.View, genesisBlock.Txns),
-			CombinedViewBlockHashSignature: BLSMultiSignature{CombinedSignature: []byte("a"), ValidatorIDBitmap: []byte("a")},
+			CombinedViewBlockHashSignature: BLSMultiSignature{CombinedSignature: []byte("a"), ValidatorIDBitmap: []byte{15}},
 		},
 		ValidatorPubKeys: []PublicKey{},
 		PrivKey:          (*PrivateKey)(&leaderPrivKey),
@@ -235,7 +238,7 @@ func TestHandleTimeoutMessagesForBlockCreation(t *testing.T) {
 	fmt.Println("Pubkeys are ", node.ValidatorPubKeys)
 	// Create a map to store the timeout messages
 	timeoutsSeen := TimeoutsSeenMap{
-		Timeout: make(map[[32]byte]map[string]TimeoutMessage),
+		Timeouts: make(map[[32]byte]map[string]TimeoutMessage),
 	}
 
 	// Create timeout messages from different public keys
@@ -272,14 +275,15 @@ func TestHandleTimeoutMessagesForBlockCreation(t *testing.T) {
 
 	// Save the initial timeoutStake
 	//	// Call handleTimeoutMessageFromPeer to create a block with an aggregated QC
-	handleTimeoutMessageFromPeer(timeoutMsg1, node, timeoutsSeen)
-	handleTimeoutMessageFromPeer(timeoutMsg2, node, timeoutsSeen)
-	handleTimeoutMessageFromPeer(timeoutMsg3, node, timeoutsSeen)
-	handleTimeoutMessageFromPeer(timeoutMsg4, node, timeoutsSeen)
+	node.timeoutsSeen = timeoutsSeen
+	node.handleTimeoutMessageFromPeer(timeoutMsg1)
+	node.handleTimeoutMessageFromPeer(timeoutMsg2)
+	node.handleTimeoutMessageFromPeer(timeoutMsg3)
+	node.handleTimeoutMessageFromPeer(timeoutMsg4)
 
 	//fmt.Println("TImeoutSeen map is after adding 3 timeout msgs  is ", timeoutsSeen.Timeout)
 	// Verify if the timeoutStake has increased
-	updatedTimeoutStake := ComputeStake(timeoutsSeen.Timeout[Hash(timeoutMsg1.View, nil)], node.PubKeyToStake)
+	updatedTimeoutStake := ComputeStake(timeoutsSeen.Timeouts[Hash(timeoutMsg1.View, nil)], node.PubKeyToStake)
 
 	if updatedTimeoutStake != 1000 {
 		t.Errorf("InvalTimeout stake")
@@ -297,7 +301,7 @@ func TestHandleTimeoutMessagesForBlockCreation(t *testing.T) {
 			View:                               node.CurView,
 			ValidatorTimeoutHighQC:             *node.HighestQC,
 			ValidatorTimeoutHighQCViews:        []uint64{node.CurView},
-			ValidatorCombinedTimeoutSignatures: BLSMultiSignature{[]byte("a"), []byte("a")},
+			ValidatorCombinedTimeoutSignatures: BLSMultiSignature{[]byte("a"), []byte{1}},
 		},
 	}
 	block.ProposerSignature, _ = Sign(Hash(block.View, block.Txns), *node.PrivKey)
@@ -306,7 +310,10 @@ func TestHandleTimeoutMessagesForBlockCreation(t *testing.T) {
 	committedblocks := &CommittedBlockMap{}
 	safeblocks.Put(&genesisBlock)
 
-	handleBlockFromPeer(&block, node, safeblocks, committedblocks)
+	node.safeBlocks = *safeblocks
+	node.committedBlocks = *committedblocks
+
+	node.handleBlockFromPeer(&block)
 
 	// Check if the block is in the safe blocks
 	if ok, _ := Contains(safeblocks.Blocks, Hash(block.View, block.Txns)); !ok {
