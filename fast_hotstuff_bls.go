@@ -1,48 +1,62 @@
-package fast_hotstuff
+package hotstuff_pseudocode
+
+import (
+	"bytes"
+	//"crypto/rand"
+	"crypto/sha256"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"math"
+	mrand "math/rand"
+	"reflect"
+	"sort"
+	"strconv"
+	"time"
+)
 
 // This corresponds to the Algorithm 3 in the Fast-HotStuff
 // paper https://arxiv.org/pdf/2010.11454.pdf
 
-// A BLSPartialSignature is a signature typically made by a validator on a
-// particular payload that can be combined with other signatures from other
-// validators for the same or different payload. For example, if a hundred
-// validators were to sign Hash(block1.ToBytes()), then all of those signatures
-// could be combined using BLS into a single BLSMultiSignature. Using
-// a multi-signature scheme, we're also able to combine signatures on
-// different messages into one combined signature.
-//
-// Using BLS signatures is preferred because it's much more space-efficient
-// and computationally efficient than using raw signatures. In addition to
-// condensing n signatures down to a single O(1) value, verifying a
-// combined BLS signature can be done with only one expensive signature
-// check, as opposed to checking n signatures individually.
 type BLSPartialSignature []byte
 
-// A BLSMultiSignature is a multi-signature that is the result of combining multiple
-// BLSPartialSignatures on the same payload. In order to verify a BLSMultiSignature,
-// a validator needs the public keys of all of the validators whose signatures were
-// combined. This is why a secondary field called ValidatorIDBitmap is included
-// in this struct. It allows anyone who receives a BLSMultiSignature to check it
-// by first looking up the public keys of all of the validators whose signatures were
-// combined, and then verifying the BLSMultiSignature using those public keys.
-// Along with the BLSMultiSignature, we also need to store the list of messages
-// the were signed by the validators to make this multi-signature. We store this
-// outside the BLSMultiSignature struct, in the AggregateQC.
-//
-// Importantly, while ValidatorIDBitmap technically requires O(n) space, where n is
-// the number of validators, it can be compressed significantly using a bitmap that
-// stores the indices of the validators whose signatures were combined. For
-// example, because all validators are known at all times, a convention can be used
-// whereby validators are sorted by their public keys. Then, the ValidatorIDBitmap
-// is an n-bit number, where the i-th bit determines whether the i-th validator
-// in the sorted list participated it the combined signature.
-//
-// This means that even if you have 10,000 validators involved in a signature, you will
-// only need about a kilobyte of space to store the ValidatorIDBitmap, as the storage
-// cost is asymptotically: 1 bit per validator.
 type BLSMultiSignature struct {
-	CombinedSignature byte
+	CombinedSignature []byte
 	ValidatorIDBitmap []byte
+}
+
+// TxnMsg Just creating TxnMsg to avoid errors
+type TxnMsg struct {
+	From   string
+	To     string
+	Amount int
+}
+
+func GenerateTxns(n int) []TxnMsg {
+	mrand.Seed(time.Now().UnixNano())
+
+	var txns []TxnMsg
+	for i := 0; i < n; i++ {
+		txns = append(txns, TxnMsg{
+			From:   strconv.Itoa(mrand.Intn(1000)),
+			To:     strconv.Itoa(mrand.Intn(1000)),
+			Amount: mrand.Intn(100),
+		})
+	}
+	return txns
+}
+
+type Node struct {
+	Id                  int
+	CurView             uint64
+	HighestQC           *QuorumCertificate
+	PubKey              *PublicKey
+	PrivKey             *PrivateKey
+	PubKeys             []PublicKey
+	LatestCommittedView uint64
+	Last_voted_view     uint64
+	PubKeyToStake       map[string]uint64
+	Timer               *Timer
 }
 
 // For the purposes of this code, we will assume that PublicKey and PrivateKey can
@@ -94,6 +108,22 @@ type QuorumCertificate struct {
 	CombinedViewBlockHashSignature BLSMultiSignature
 }
 
+// Set of SafeBlocks and CommittedBlocks
+type SafeBlockMap struct {
+	Blocks map[[32]byte]*Block
+}
+type CommittedBlockMap struct {
+	Block map[[32]byte]*Block
+}
+
+func (aqc AggregateQC) isEmpty() bool {
+	if aqc.View == 0 && aqc.ValidatorCombinedTimeoutSignatures.CombinedSignature == nil {
+		return true
+
+	}
+	return false
+}
+
 // The TimeoutMessage is sent from a validator to the next leader when that
 // validator wants to timeout on a particular view. It contains the highest QC
 // that the validator is aware of. This QC then allows the leader to link back to
@@ -110,7 +140,7 @@ type TimeoutMessage struct {
 
 	// The view that the validator wants to skip over (because they haven't received a
 	// valid block for it and they timed out).
-	TimeoutView uint64
+	View uint64
 
 	// The QuorumCertificate with the highest view that the validator is aware
 	// of. This QC allows the leader to link back to the most recent block that
@@ -153,35 +183,12 @@ type AggregateQC struct {
 	// validators in the ValidatorTimeoutHighQCViews field. In addition, for each
 	// unique HighQC.View value we received, we combine all the PartialTimeoutViewSignatures
 	// for that HighQC.View into a single BLSMultiSignature.
+	//https://crypto.stanford.edu/~dabo/pubs/papers/BLSmultisig.html
 	ValidatorTimeoutHighQCViews        []uint64
 	ValidatorCombinedTimeoutSignatures BLSMultiSignature
 }
 
-// Blocks are bundles of transactions proposed by the current leader.
-//
-// If the block from the previous view was a valid block that 2/3rds of validators
-// have seen and validated, then the next block proposed by the leader will link
-// back to that block by including a QuorumCertificate (QC), which bundles signatures from
-// VoteMessages from 2/3rds of validators, weighted by stake, indicating that
-// these validators believe the previous block to be valid. This is the simple case
-// where everything is running normally, with no timeouts, and the AggregateQC field
-// will be left empty in this case.
-//
-// In the event that 2/3rds of validators timed out in the previous view, then the
-// AggregateQC field will be constructed from TimeouteMessages received from 2/3rds
-// of the validators. In this case, the QC will be set to the QC with the highest
-// view number contained in the AggregateQC, since that is the most recent valid
-// block that 2/3rds of validators have seen.
-//
-// The idea is that each block must link to the most recent valid block that 2/3rds
-// of validators have seen. In normal conditions, the next leader will be able to
-// assemble a QC directly from the VoteMessages they receive. In a timeout scenario,
-// they will instead need to aggregate TimeoutMessages, and assemble them
-// into an AggregateQC.
 type Block struct {
-
-	// The hash of the previous block that this block extends.
-	PreviousBlockHash [32]byte
 
 	// The public key of the leader who is proposing this block.
 	ProposerPublicKey PublicKey
@@ -206,106 +213,274 @@ type Block struct {
 	ProposerSignature BLSPartialSignature
 }
 
-// === Some local variables ===
+// Some  utility functions
+func (node Node) GetMyKeys(mypubkey PublicKey, myprivkey PrivateKey) {
+	node.PrivKey = &myprivkey
+	node.PubKey = &mypubkey
+}
 
-// The current validator's public and private keys, which should have been registered
-// previously, and which should have stake allocated to them as well.
-var myPublicKey, myPrivateKey = GetMyKeys()
+func VerifySignature(hash [32]byte, publicKey PublicKey, signature []byte) bool {
+	return true
+}
 
-// The timeout value is initially set to thirty seconds, and then doubled
-// for each consecutive timeout the node experiences, which allows for other nodes
-// to catch up in the event of a network disruption.
-var timeoutSeconds = GetInitialTimeout()
+// ResetTimeout() resets timer for a specific duration. Duration is the funciton of the number of times
+// the protocol observed failure. But it should be capped and grandually decreased to a normal acceptable
+// value.
 
-// The ResetTimeout() function is not explicitly defined in this pseudocode, but
-// it can be assumed to reset the timeout duration (see also WaitForTimeout() below).
-ResetTimeout(timeoutSeconds)
+func computeLeader(view uint64, pubKeyToStake map[string]uint64) (string, error) {
 
-// The highest QC that this node has seen so far. This is tracked so that the
-// node can know when a block can be finalized, and so that the highest QC can
-// be sent to the leader in the event of a timeout.
-var highestQC *QuorumCertificate = nil
+	comulativeStakeSlice, orderedpubkeys, _ := calculateCumulativeStakesSlice(pubKeyToStake)
 
-// The networkChannel variable is a wrapper around peer connections. We will use
-// it as an abstraction in this pseudocode to send and receive messages from
-// other peers. For simplicity, we skip the implementation details of the p2p
-// connections.
-networkChannel = ConnectToPeers()
+	// Initialize the random number generator with the provided seed
+	r := mrand.New(mrand.NewSource(int64(view)))
+	totalStake := uint64(0)
+	for _, pubkey := range orderedpubkeys {
+		totalStake = totalStake + pubKeyToStake[pubkey]
+	}
 
-// The currentView variable stores the view that this node is currently on. We use the
-// GetCurrentView() value in this pseudode instead of starting with 0 because
-// we assume the network is in steady-state, rather than starting from the
-// initial conditions, and we leave out all the details of getting in sync with
-// other peers here as well.
-currentView = GetCurrentView()
+	// Generate a random number within the range of 0 to totalStake
+	randomNumber := r.Uint64() % (totalStake + 1)
 
-// The votesSeen variable stores a map of vote messages seen by the leader in the
-// current view. We will make sure this map only stores votes for the currentView.
-votesSeen = map[PublicKey]*VoteMessage{}
+	for idx, cumulativestake := range comulativeStakeSlice {
+
+		if isSmallerorOrEqual(randomNumber, cumulativestake) {
+			return orderedpubkeys[idx], nil
+		}
+
+	}
+	return "", fmt.Errorf("no leader found")
+
+}
+
+// Calculate the cumulative stakes slice and total stake
+func calculateCumulativeStakesSlice(pubKeyToStake map[string]uint64) ([]uint64, []string, error) {
+	cumulativeStakesSlice := make([]uint64, 0, len(pubKeyToStake))
+	var cumulativeStake uint64
+
+	// Sort the public keys lexicographically
+	var pubKeys []string
+	for pubKey := range pubKeyToStake {
+		pubKeys = append(pubKeys, pubKey)
+	}
+	sort.Strings(pubKeys)
+
+	for _, pubKey := range pubKeys {
+		stake := pubKeyToStake[pubKey]
+		if stake == 0 {
+			return nil, nil, fmt.Errorf("stake for pubkey '%s' cannot be zero", pubKey)
+		}
+
+		cumulativeStake += stake
+		cumulativeStakesSlice = append(cumulativeStakesSlice, cumulativeStake)
+	}
+
+	if cumulativeStake == 0 {
+		return nil, nil, fmt.Errorf("total stake cannot be zero")
+	}
+
+	return cumulativeStakesSlice, pubKeys, nil
+}
+
+// Check if the randomly chosen value is smaller or equal to the range of cumulative stake for a specific leader
+func isSmallerorOrEqual(randomNumber, higher uint64) bool {
+
+	if randomNumber <= higher {
+		return true
+	} else {
+		return false
+	}
+}
+
+func Hash(viewNumber uint64, data interface{}) [32]byte {
+	var dataBytes []byte
+	switch data.(type) {
+	case []TxnMsg:
+		txnBytes, err := json.Marshal(data)
+		if err != nil {
+			panic(err)
+		}
+		dataBytes = txnBytes
+	case uint64:
+		viewBytes := []byte(fmt.Sprintf("%d", data))
+		dataBytes = viewBytes
+	case nil:
+
+	default:
+		panic("invalid data type")
+	}
+	viewBytes := []byte(fmt.Sprintf("%d", viewNumber))
+	viewHash := sha256.Sum256(viewBytes)
+	var combinedHash [32]byte
+
+	if dataBytes != nil {
+		combinedHash = sha256.Sum256(append(dataBytes, viewHash[:]...))
+	} else {
+		combinedHash = sha256.Sum256(viewHash[:])
+	}
+	return combinedHash
+}
+
+func (pk PublicKey) Equals(other PublicKey) bool {
+	return bytes.Equal(pk, other)
+}
+
+// Rev: We don't know if the current view of the node is the current view of majority of the network.
+// It is map of the hash(block.view, block.hash) to map string (vote.voter)
+type votesSeen struct {
+	Vote map[[32]byte]map[string]VoteMessage
+}
 
 // The timeoutsSeen variable is similar to votesSeen. It stores the timeout messages
 // seen by the leader in the current view. We also make sure this map only stores
 // timeouts for the current view.
-timeoutsSeen = map[PublicKey]*TimeoutMessage{}
+
+// Rev: We don't know if the current view of the node is the current view of majority of the network.
+// It is map of the hash(timeout.view) to map string (timeoutMessage.ValidatorPublickey)
+type TimeoutsSeenMap struct {
+	Timeout map[[32]byte]map[string]TimeoutMessage
+}
+
+// Validates supermajority has voted in QC
+func ValidateSuperMajority_QC(signature BLSMultiSignature) bool {
+	return true
+}
+
+// ValidateSuperMajority_AggQC Validate super majority has sent their timeout msgs
+func ValidateSuperMajority_AggQC(signature BLSMultiSignature) bool {
+	//
+	return true
+}
+func verifySignaturesAndTxns(block Block) bool {
+	return true
+}
+func Sign(payload [32]byte, privKey PrivateKey) ([]byte, error) {
+	//to be implemented
+	return []byte("3"), nil
+}
 
 // The ResetTimeoutAndAdvanceView is used to reset the timeout duration, and the
 // leader maps, as well as to increment the currentView. It’s called once a valid
 // block has been produced for the view.
-func ResetTimeoutAndAdvanceView(newTimeoutSeconds) {
-	ResetTimeout(newTimeoutSeconds)
-	AdvanceView()
-}
 
 // The AdvanceView function is used to reset the leader’s vote and timeout maps and
 // increment the currentView.
-func AdvanceView() {
-	votesSeen.Reset()
-	timeoutsSeen.Reset()
-	currentView += 1
+
+//votesSeen.Reset() and
+//	TimeoutsSeenMap.Reset(certificate.View) can be called later whenever needed.
+
+func (node *Node) AdvanceView(block *Block) {
+	if block.AggregateQC.isEmpty() {
+		node.CurView = block.QC.View + 1
+	} else {
+		node.CurView = block.AggregateQC.View + 1
+
+	}
+	fmt.Println("node.Timer is", *node.Timer)
+
+	node.Timer.Reset()
+}
+
+// This functions is used to get index  of the signer of QC in the bitmap.
+func getOnBitIndices(bitmap []byte) []int {
+	indices := make([]int, 0)
+	for i := 0; i < len(bitmap)*8; i++ {
+		if getBitAtIndex(bitmap, i) {
+			indices = append(indices, i)
+		}
+	}
+	return indices
+}
+
+func getBitAtIndex(bitmap []byte, i int) bool {
+	byteIndex := i / 8
+	bitIndex := uint(i % 8)
+	return bitmap[byteIndex]&(1<<bitIndex) != 0
+}
+
+func Send(msg interface{}, nextleader PublicKey) {
+	switch msg.(type) {
+	case VoteMessage:
+		// send vote message
+	case TimeoutMessage:
+		// send timeout message
+	default:
+		// handle unknown message type
+	}
+}
+
+func GetBlockIDForView(view uint64, blockMap SafeBlockMap) ([32]byte, error) {
+	for _, block := range blockMap.Blocks {
+		if block.View == view {
+			return Hash(block.View, block.Txns), nil
+		}
+	}
+	return [32]byte{}, fmt.Errorf("block not found for view %d", view)
+}
+
+func (node *Node) commitChainFromGrandParent(block *Block, safeblocks *SafeBlockMap, committedBlocks *CommittedBlockMap) {
+	parent := safeblocks.Blocks[block.QC.BlockHash]
+	if parent == nil {
+		return
+	}
+
+	grandParent := safeblocks.Blocks[parent.QC.BlockHash]
+	if grandParent == nil {
+		return
+	}
+
+	if parent.View != (grandParent.View + 1) {
+		return
+	}
+
+	for view := node.LatestCommittedView + 1; view <= grandParent.View; view++ {
+		blockHash, err := GetBlockIDForView(view, *safeblocks)
+		if err != nil {
+			return
+		}
+
+		block, ok := safeblocks.Blocks[blockHash]
+		if !ok {
+			break
+		}
+
+		if _, ok := committedBlocks.Block[blockHash]; ok {
+			continue
+		}
+
+		committedBlocks.Block[blockHash] = block
+		node.LatestCommittedView = view
+	}
 }
 
 // sanityCheckBlock is used to verify that the block contains valid information.
-func sanityCheckBlock(block Block) bool {
-	// Make sure the block is for the current view.
-	//
-	// Notice that with this code it is technically possible to receive a valid block
-	// that has a view *less* than the current one. This can happen in a case where
-	// you timeout, advance the view, and then it turns out that the block you
-	// timed out on was able to form a QC. This is a general class of issues that is resolved
-	// with block caching logic that is not included in this pseudocode. Generally,
-	// you can assume that these situations where you receive a block from a previous
-	// view are handled by the caching logic. The caching logic would need to essentially
-	// do all of the same checks as we do here, but skip the checks that are specific to the
-	// current view.
-	//
-	// In addition, it is possible to receive a block that is *ahead* of your current
-	// view. This can happen in a case where the leader for the current view was able
-	// to form a QC without your vote, before you were able to receive the block. Again
-	// this is a general class of issues that is resolved with block caching logic that
-	// is not included here. This case is simpler than the previous case because you
-	// would simply not process the future block until downloading and processing the
-	// previous block referred to by its QC.
-	if block.View != currentView {
+func sanityCheckBlock(block Block, node *Node) bool {
+	if block.View < node.CurView {
+		return false
+	}
+
+	if block.View <= node.Last_voted_view {
+		//Have already voted for the block.
 		return false
 	}
 
 	// Check that the block's proposer is the expected leader for the current view.
-	if block.ProposerPublicKey != computeLeader(currentView) {
+	leader, _ := computeLeader(block.View, node.PubKeyToStake)
+	if !block.ProposerPublicKey.Equals(PublicKey(leader)) {
 		return false
 	}
 
 	// Make sure the leader signed the block.
-	if !VerifySignature(block.Hash(), block.ProposerPublicKey, block.ProposerSignature) {
+	if !VerifySignature(Hash(block.View, block.Txns), block.ProposerPublicKey, block.ProposerSignature) {
 		return false
 	}
 
 	// The block's QC should never be empty.
-	if block.QC == nil {
+	if &block.QC == nil {
 		return false
 	}
 
 	// We make sure the QC contains valid signatures from 2/3rds of validators, weighted by stake.
-	if !validateQuorumCertificate(block.QC) {
+	if !ValidateSuperMajority_QC(block.QC.CombinedViewBlockHashSignature) {
 		return false
 	}
 
@@ -323,42 +498,33 @@ func validateQuorumCertificate(qc QuorumCertificate) bool {
 	// of the stake. Also make sure there are no repeated public keys.
 	// Note that we use the Bitmap contained in the combined signature to determine
 	// which validators' signatures were used, and what their total stake was.
-	if !ValidateSuperMajority(qc.CombinedViewBlockHashSignature) {
+	if !ValidateSuperMajority_QC(qc.CombinedViewBlockHashSignature) {
 		return false
 	}
 
 	// Make sure that the BlockHash in the qc matches our local BlockHash history.
-	if GetBlockHashForView(qc.View) != qc.BlockHash {
-		return false
-	}
+	//Rev: It is not possible to have a valid quorum certificate and different blockchain history
+	// Hence, this check is not necessary.
 
 	return true
 }
 
-func validateTimeoutProof(aggregateQC AggregateQC) bool {
+// todo: This function needs to be revised
+func validateTimeoutProof(aggregateQC AggregateQC, pubkeys []PublicKey) bool {
+
 	// Make sure that the validators included in the QC collectively own at least 2/3rds
 	// of the stake. Also make sure there are no repeated public keys.
 	// Note the bitmap in the signature allows us to determine how much stake the
 	// validators had.
-	if !ValidateSuperMajority(aggregateQC.ValidatorCombinedTimeoutSignatures) {
+	if !ValidateSuperMajority_AggQC(aggregateQC.ValidatorCombinedTimeoutSignatures) {
 		return false
 	}
 
 	// Iterate over all the aggregate qc views and verify that the multi-signature is correct.
-	var payloads [][]byte
-	var highestQCView uint64
-	for ii := 0; ii < len(aggregateQC.ValidatorTimeoutHighQCViews); ii++ {
-		payload := Hash(aggregateQC.View, aggregateQC.ValidatorTimeoutHighQCViews[ii])
-		payloads = append(payloads, payload)
 
-		if aggregateQC.ValidatorTimeoutHighQCViews[ii] > highestQCView {
-			highestQCView = aggregateQC.ValidatorTimeoutHighQCViews[ii]
-		}
-	}
-
-	if !VerifyMultiSignature(payloads, aggregateQC.ValidatorCombinedTimeoutSignatures) {
-		return false
-	}
+	// Rev: Don't need to iterate over all the signatures. Just verify the highQC and the
+	// aggregated signature of the aggregatedQC.
+	highestQCView := uint64(0)
 
 	// The highest QC view found in the signatures should match the highest view
 	// of the HighestQC included in the AggregateQC.
@@ -369,21 +535,54 @@ func validateTimeoutProof(aggregateQC AggregateQC) bool {
 	return true
 }
 
+func (sbm *SafeBlockMap) Put(block *Block) {
+	sbm.Blocks[Hash(block.View, block.Txns)] = block
+}
+
+func (cbm *CommittedBlockMap) Put(block *Block) {
+	cbm.Block[Hash(block.View, block.Txns)] = block
+}
+
+// Contains returns true if the given key is in the  map, and false otherwise.
+
+func Contains(m interface{}, key interface{}) (bool, error) {
+	v := reflect.ValueOf(m)
+	if v.Kind() != reflect.Map {
+		return false, errors.New("m is not a map")
+	}
+	if v.IsNil() {
+		return false, errors.New("m is nil")
+	}
+	k := reflect.ValueOf(key)
+	if k.Type() != v.Type().Key() {
+		return false, errors.New("key type does not match map key type")
+	}
+	elemType := v.Type().Elem()
+	if elemType.Kind() == reflect.Ptr {
+		elemType = elemType.Elem()
+	}
+	zero := reflect.Zero(elemType)
+
+	if !v.MapIndex(k).IsValid() {
+		return false, nil
+	}
+	return !reflect.DeepEqual(v.MapIndex(k).Interface(), zero.Interface()), nil
+}
+
 // The handleBlockFromPeer is called whenever we receive a block from a peer.
-func handleBlockFromPeer(block *Block) {
+func handleBlockFromPeer(block *Block, node *Node, safeblocks *SafeBlockMap, committedblocks *CommittedBlockMap) {
 	// Make sure that the block contains a valid QC, signature, transactions,
 	// and that it's for the current view.
-	if !sanityCheckBlock(block) {
+	if !sanityCheckBlock(*block, node) {
 		return
 	}
 
 	// The safeVote variable will tell us if we can vote on this block.
 	safeVote := false
-
 	// If the block doesn’t contain an AggregateQC, then that indicates that we
 	// did NOT timeout in the previous view, which means we should just check that
 	// the QC corresponds to the previous view.
-	if block.AggregateQC == nil {
+	if block.AggregateQC.isEmpty() {
 		// The block is safe to vote on if it is a direct child of the previous
 		// block. This means that the parent and child blocks have consecutive
 		// views. We use the current block’s QC to find the view of the parent.
@@ -394,75 +593,95 @@ func handleBlockFromPeer(block *Block) {
 		// the block accordingly.
 
 		// First we make sure the block contains a valid AggregateQC.
-		validateTimeoutProof(block.AggregateQC)
+		validateTimeoutProof(block.AggregateQC, node.PubKeys)
 		// We find the QC with the highest view among the QCs contained in the
 		// AggregateQC.
 		highestTimeoutQC := block.AggregateQC.ValidatorTimeoutHighQC
 		// If our local highestQC has a smaller view than the highestTimeoutQC,
 		// we update our local highestQC.
-		if highestTimeoutQC.View > highestQC.View {
-			highestQC = highestTimeoutQC
+		if highestTimeoutQC.View > node.HighestQC.View {
+			node.HighestQC = &(highestTimeoutQC)
 		}
 		// We make sure that the block’s QC matches the view of the highest QC that we’re aware of.
-		safeVote = block.QC.View == highestQC.View
+		safeVote = block.QC.View == node.HighestQC.View && block.AggregateQC.View+1 == block.View
 	}
 
 	// If safeVote is true, we will vote on the block.
 	if safeVote {
 		// Construct the vote message. The vote will contain the validator's
 		// signature on the <view, blockHash> pair.
-		payload := Hash(block.View, block.Hash())
-		blockHashSignature := Sign(payload, myPrivateKey)
+		payload := Hash(block.View, block.Txns)
+		blockHashSignature, _ := Sign(payload, *node.PrivKey)
 
 		voteMsg := VoteMessage{
-			ValidatorPublicKey:            myPublicKey,
+			ValidatorPublicKey:            *node.PubKey,
 			View:                          block.View,
-			BlockHash:                     block.Hash(),
+			BlockHash:                     Hash(block.View, block.Txns),
 			PartialViewBlockHashSignature: blockHashSignature,
 		}
-		// Send the vote directly to the next leader.
-		Send(voteMsg, computeLeader(currentView+1))
 		// We can now proceed to the next view.
-		ResetTimeoutAndAdvanceView(GetInitialTimeout())
+		//
+		// NOTE(diamondhands):
+		// Calling AdvanceView() updates our CurView to be equal to block.QC.View + 1,
+		// which is basically equivalent to block.View. Because of this, we need to do
+		// it *before* we call computeLeader(node.CurView+1, node.PubKeyToStake), which
+		// I moved to AFTER the call of AdvanceView. If we don't make this change, I think
+		// that we would be effectively calling computeLeader(previousBlock.View+1) rather
+		// than computeLeader(block.View+1), the latter of which is what we want.
+		node.AdvanceView(block)
+		// Send the vote directly to the next leader.
+		leader, _ := computeLeader(node.CurView+1, node.PubKeyToStake)
+		Send(voteMsg, PublicKey(leader))
+		node.Last_voted_view = uint64(math.Max(float64(node.Last_voted_view), float64(node.CurView)))
+
+		// Add the block to the safeblocks struct.
+		safeblocks.Put(block)
+
+		// In this case we update the HighestQC to the block's QC.
+		//
+		// NOTE(diamondhands): Before I added this here, we were only updating the
+		// node.HighestQC in a timeout scenario (i.e. when we had !AggregateQC.isEmpty()).
+		// However, I think we need to set it every time we get a block that is safe to
+		// vote on. Maybe even regardless of whether we vote on it or not.
+		if block.QC.View > node.HighestQC.View {
+			node.HighestQC = &(block.QC)
+		}
 	}
 
 	// Our commit rule relies on the fact that blocks were produced without timeouts.
 	// Check if the chain looks like this:
 	// B1 - B2 - ... - B_current (current block)
 	// Where ... represent an arbitrary number of skipped views.
-	B_current := block
-	B2 := GetBlockForHash(block.QC.BlockHash)
-	B1 := GetBlockForHash(B2.QC.BlockHash)
 
-	// We update the highestQC if the block we received has one with a higher view.
-	// In the case where we have an AggregateQC, remember that B_current.QC will
-	// line up with the highest QC contained within the AggregateQC.
-	if B_current.QC.View > highestQC.View {
-		highestQC = B_current.QC
-	}
-
-	// Check that B2 is a direct child of B1.
-	if B2.View == B1.View+1 {
-		// A direct chain is formed between B1 and B2, reinforced by the QC
-		// in B_current. This means we should commit all blocks up to and including
-		// block B1.
-		CommitUpToBlock(B1)
-	}
+	node.commitChainFromGrandParent(block, safeblocks, committedblocks)
 }
 
-func validateVote(vote VoteMessage) bool {
+func verifyValidatorPublicKey(validatorPublicKey PublicKey, publicKeys []PublicKey) bool {
+	for _, publicKey := range publicKeys {
+		if bytes.Equal(publicKey[:], validatorPublicKey[:]) {
+			return true
+		}
+	}
+	return false
+}
+
+func validateVote(vote VoteMessage, node *Node, safeblocks *SafeBlockMap) bool {
 	// Make sure the vote is made on the block in the previous view.
-	if vote.View != currentView-1 {
+	if vote.View < node.CurView {
 		return false
 	}
 
 	// Make sure that the validator is registered.
-	if !verifyValidatorPublicKey(vote.ValidatorPublicKey) {
+	if !verifyValidatorPublicKey(vote.ValidatorPublicKey, node.PubKeys) {
 		return false
 	}
 
 	// Make sure that the BlockHash in the view matches our local BlockHash history.
-	if GetBlockHashForView(vote.View) != vote.BlockHash {
+	blockHash, err := GetBlockIDForView(vote.View, *safeblocks)
+	if err != nil {
+
+	}
+	if blockHash != vote.BlockHash {
 		return false
 	}
 
@@ -474,27 +693,87 @@ func validateVote(vote VoteMessage) bool {
 
 	return true
 }
+func ComputeStake(messages interface{}, pubKeyToStake map[string]uint64) uint64 {
+	totalStake := uint64(0)
+	switch m := messages.(type) {
+	case map[string]VoteMessage:
+		for _, vote := range m {
+			if stake, exists := pubKeyToStake[string(vote.ValidatorPublicKey)]; exists {
+				totalStake += stake
+			}
+		}
+	case map[string]TimeoutMessage:
+		for _, timeout := range m {
+			if stake, exists := pubKeyToStake[string(timeout.ValidatorPublicKey)]; exists {
+				totalStake += stake
+
+			}
+		}
+	}
+	return totalStake
+}
+
+// In correct need to be fixed. Validator public key
+func AppendVoteMessage(votesSeen *map[[32]byte]map[string]VoteMessage, vote VoteMessage) {
+	// Check if the outer key exists in the map
+	innerMap, ok := (*votesSeen)[Hash(vote.View, vote.BlockHash)]
+	if !ok {
+		// Initialize the inner map if it doesn't exist
+		innerMap = make(map[string]VoteMessage)
+		(*votesSeen)[Hash(vote.View, vote.BlockHash)] = innerMap
+	}
+
+	// Check if the inner key exists in the inner map
+	_, ok = innerMap[string(vote.ValidatorPublicKey)]
+	if ok {
+		// If the inner key exists, the validator has already voted for the given (view, blockHash) pair
+		// and the new vote should be rejected.
+		return
+	}
+
+	// Add the new vote to the inner map
+	innerMap[string(vote.ValidatorPublicKey)] = vote
+}
+
+func GetTotalStake(pubKeyToStake map[string]uint64) uint64 {
+	totalStake := uint64(0)
+	for _, stake := range pubKeyToStake {
+		totalStake += stake
+	}
+	return totalStake
+}
+
+func (b *Block) SetQC(qc *QuorumCertificate) {
+	b.QC = *qc
+}
+
+func (node *Node) AmIaLeader(view uint64) bool {
+	return true
+
+}
 
 // The handleVoteMessageFromPeer is called whenever we receive a vote from a peer.
-func handleVoteMessageFromPeer(vote *VoteMessage) {
+func handleVoteMessageFromPeer(vote *VoteMessage, node *Node, safeblocks *SafeBlockMap, voteseen *map[[32]byte]map[string]VoteMessage) {
 	// If we're not the leader, ignore all votes.
-	if !IsLeader(currentView) {
+	if !node.AmIaLeader(vote.View + 1) {
 		return
 	}
 
 	// Make sure that the vote is for the currentView and validate
 	// the vote’s signature. We also run a check to make sure we didn’t
 	// already receive a timeout or another vote from this peer.
-	if !validateVote(vote) {
+	if !validateVote(*vote, node, safeblocks) {
 		return
 	}
 
 	// If we get here, it means we are the leader so add the vote to our map of
 	// votes seen.
-	votesSeen[vote.ValidatorPublicKey] = vote
+	AppendVoteMessage(voteseen, *vote)
 
 	// Check if we’ve gathered votes from 2/3rds of the validators, weighted by stake.
-	if ComputeVoteStake(votesSeen) < 2/3*GetTotalStake() {
+
+	voteStake := ComputeStake((*voteseen)[Hash(vote.View, vote.BlockHash)], node.PubKeyToStake)
+	if voteStake < 2*GetTotalStake(node.PubKeyToStake)/3 {
 		return
 	}
 
@@ -505,32 +784,111 @@ func handleVoteMessageFromPeer(vote *VoteMessage) {
 	// previous block that we're about to build on top of.
 	qc := QuorumCertificate{
 		View:                           vote.View,
-		BlockHash:                      vote.BlockHash,
-		CombinedViewBlockHashSignature: ConstructCombinedSignatureFromVotes(votesSeen),
+		BlockHash:                      vote.BlockHash, //Just for testing purposes.
+		CombinedViewBlockHashSignature: BLSMultiSignature{[]byte("a"), []byte("a")},
 	}
 
 	// Construct the block
 	block := Block{
-		PreviousBlockHash: qc.BlockHash,
-		ProposerPublicKey: myPublicKey,
-		Txns:              GetTxns(),
-		View:              currentView,
-		QC:                qc,
-		AggregateQC:       nil,
+		ProposerPublicKey: *node.PubKey,
+		Txns:              GenerateTxns(10),
+		// NOTE(diamondhands): Before, we were setting this to node.CurView. But I think this
+		// was incorrect. In particular, node.CurView will generally be set to
+		// previousBlock.QC+1 via AdvanceView(), which is the only place we modify it. As
+		// a result, if we set the block's view to node.CurView, then we would never
+		// actually increment the view! So I think, at minimum, this value should be set
+		// to node.CurView+1. But rather than depend on CurView, it seems better to just
+		// set it to vote.View+1, or equivalently qc.View+1. I prefer the latter because it's
+		// what handleVoteMessageFromPeer() explicitly checks in order to determine whether
+		// or not to vote on a block.
+		View: qc.View + 1,
+		QC:   qc,
+		AggregateQC: AggregateQC{
+			View:                               0,
+			ValidatorTimeoutHighQC:             QuorumCertificate{},
+			ValidatorTimeoutHighQCViews:        nil,
+			ValidatorCombinedTimeoutSignatures: BLSMultiSignature{[]byte("a"), []byte("a")},
+		},
 	}
 
 	// Sign the block using the leader’s private key.
-	block.ProposerSignature = Sign(block.Hash(), myPrivateKey)
-	// Blast the block to everyone including yourself. This means we'll process
-	// this block in handleBlockFromPeer, where we'll also update our highestQC and
-	// advance to the next view. As such, there is no reason to
-	// call ResetTimeoutAndAdvanceView() here.
+	block.ProposerSignature, _ = Sign(Hash(block.View, block.Txns), *node.PrivKey)
 	broadcast(block)
 }
 
-func validateTimeout(timeout TimeoutMessage) bool {
+// ///////Timeout and Timers
+type Timer struct {
+	baseDuration time.Duration
+	timer        *time.Timer
+	retries      int
+}
+
+func NewTimer(baseDuration time.Duration) *Timer {
+	return &Timer{
+		baseDuration: baseDuration,
+		retries:      0,
+	}
+}
+
+func (t *Timer) Start(node *Node) {
+	t.timer = time.AfterFunc(t.getDuration(), func() {
+		t.onTimeout(node)
+	})
+}
+
+func (t *Timer) Stop() {
+	if t.timer != nil {
+		t.timer.Stop()
+	}
+}
+
+// After a successful view Reset() is called. Number of retries is 0 so that we get the base duration when
+// getDuration() is called.
+func (t *Timer) Reset() {
+	t.Stop()
+	t.retries = 0
+	t.timer.Reset(t.getDuration())
+}
+
+// Duration gets doubled each time when onTimeout(). It's function of the number of retries.
+func (t *Timer) onTimeout(node *Node) {
+
+	t.retries = t.retries + 1
+	node.CurView = node.CurView + 1
+	timeoutMsg := t.CreateTimeout_msg(node)
+	leader, _ := computeLeader(node.CurView+1, node.PubKeyToStake)
+	Send(timeoutMsg, PublicKey(leader))
+	//To avoid voting in this view.
+	node.Last_voted_view = uint64(math.Max(float64(node.Last_voted_view), float64(node.CurView)))
+	t.Stop()
+	t.Start(node)
+}
+
+func (t *Timer) getDuration() time.Duration {
+	return t.baseDuration * time.Duration(1<<uint(t.retries))
+}
+
+func (t *Timer) CreateTimeout_msg(node *Node) *TimeoutMessage {
+	sig, _ := Sign(Hash(node.CurView, node.HighestQC.View), *node.PrivKey)
+	return &TimeoutMessage{
+		ValidatorPublicKey:          *node.PubKey,
+		View:                        node.CurView,
+		HighQC:                      *node.HighestQC,
+		PartialTimeoutViewSignature: sig,
+	}
+
+}
+
+// ////
+func broadcast(block Block) {
+	//todo: implementing broadcast
+}
+
+// /Needs to be redone.
+// /Needs to be redone
+func validateTimeout(timeout TimeoutMessage, node *Node) bool {
 	// Make sure that the validator is registered.
-	if !verifyValidatorPublicKey(vote.ValidatorPublicKey) {
+	if !verifyValidatorPublicKey(timeout.ValidatorPublicKey, node.PubKeys) {
 		return false
 	}
 
@@ -540,7 +898,7 @@ func validateTimeout(timeout TimeoutMessage) bool {
 	}
 
 	// Verify the validator signature
-	payload := Hash(view, timeout.HighQC.View)
+	payload := Hash(timeout.View, nil)
 	if !VerifySignature(payload, timeout.ValidatorPublicKey, timeout.PartialTimeoutViewSignature) {
 		return false
 	}
@@ -548,28 +906,83 @@ func validateTimeout(timeout TimeoutMessage) bool {
 	return true
 }
 
+func AppendTimeoutMessage(timeoutsSeen *TimeoutsSeenMap, timeout TimeoutMessage) {
+
+	// Check if the outer key exists in the map
+	innerMap, ok := (*timeoutsSeen).Timeout[Hash(timeout.View, nil)]
+	if !ok {
+		// Initialize the inner map if it doesn't exist
+		innerMap = make(map[string]TimeoutMessage)
+		(*timeoutsSeen).Timeout[Hash(timeout.View, nil)] = innerMap
+	}
+
+	// Check if the inner key exists in the inner map
+	_, ok = innerMap[string(timeout.ValidatorPublicKey)]
+	if ok {
+		// If the inner key exists, the validator has already sent a timeout message for the given
+		// (view, highQC.blockHash) pair and the new timeout message should be rejected.
+		return
+	}
+
+	// Add the new timeout message to the inner map
+	innerMap[string(timeout.ValidatorPublicKey)] = timeout
+}
+
+func GetHighestViewHighQC(timeoutSeen map[string]TimeoutMessage) QuorumCertificate {
+	highestView := uint64(0)
+	var highestHighQC QuorumCertificate
+
+	for _, timeout := range timeoutSeen {
+		if timeout.HighQC.View > highestView {
+			highestView = timeout.HighQC.View
+			highestHighQC = timeout.HighQC
+
+		}
+	}
+
+	return highestHighQC
+}
+
+func GetTimeouthighQcViews(timeoutSeen map[string]TimeoutMessage) []uint64 {
+	views := []uint64{}
+
+	for _, timeout := range timeoutSeen {
+		views = append(views, timeout.HighQC.View)
+	}
+
+	return views
+}
+
 // The handleTimeoutMessageFromPeer is called whenever we receive a timeout
 // from a peer.
-func handleTimeoutMessageFromPeer(timeoutMsg TimeoutMessage) {
+func handleTimeoutMessageFromPeer(timeoutMsg TimeoutMessage, node *Node, timeoutseen TimeoutsSeenMap) {
+
 	// If we're not the leader, ignore all timeout messages.
-	if !IsLeader(vote.View) {
+	// NOTE(diamondhands): Before, this was checking timeoutMsg.View rather than
+	// timeoutMsg.View+1. This seemed wrong because the view number in the
+	// timeoutMsg is the view number that the validator is timing out in, which
+	// will become the QC view rather than the block's view. This fix causes a
+	// direct parallelism to the handleVoteMessageFromPeer function as well, where
+	// we check vote.View+1.
+	if !node.AmIaLeader(timeoutMsg.View + 1) {
 		return
 	}
 
 	// Make sure that the timeoutMsg is for the most recent view and validate all of
 	// its signatures, including those for its HighQC. We also run a check to make
 	// sure we didn’t already receive a timeout or another vote from this peer.
-	if !validateTimeout(timeoutMsg) {
+	if !validateTimeout(timeoutMsg, node) {
 		return
 	}
 
 	// If we get here, it means we are the leader so add the timeoutMsg to our
 	// map of timeouts seen.
-	timeoutsSeen[timeoutMsg.ValidatorPublicKey] = timeoutMsg
-
+	AppendTimeoutMessage(&timeoutseen, timeoutMsg)
 	// Check if we’ve gathered timeouts from 2/3rds of the validators, weighted
 	// by stake.
-	if ComputeTimeoutStake(timeoutsSeen) < 2/3*GetTotalStake() {
+	timeoutStake := ComputeStake((timeoutseen).Timeout[Hash(timeoutMsg.View, timeoutMsg.HighQC.View)], node.PubKeyToStake)
+
+	if timeoutStake < 2/3*GetTotalStake(node.PubKeyToStake) {
 		return
 	}
 
@@ -581,21 +994,25 @@ func handleTimeoutMessageFromPeer(timeoutMsg TimeoutMessage) {
 	// validatorHighQCs list of all the QCs sent to use by the validators, along
 	// with their signatures. We also find the QC with the highest view among the
 	// validatorHighQCs.
-	highQC, timeoutHighQCViews, timeoutHighQCCombinedSigs := FormatTimeoutQCs(timeoutsSeen)
+	highQC := GetHighestViewHighQC((timeoutseen).Timeout[Hash(timeoutMsg.View, nil)])
+	views := GetTimeouthighQcViews((timeoutseen).Timeout[Hash(timeoutMsg.View, nil)])
 	// Construct the AggregateQC for this view.
 	aggregateQC := AggregateQC{
-		View:                               timeoutMsg.TimeoutView,
+		View:                               timeoutMsg.View,
 		ValidatorTimeoutHighQC:             highQC,
-		ValidatorTimeoutHighQCViews:        timeoutHighQCViews,
-		ValidatorCombinedTimeoutSignatures: timeoutHighQCCombinedSigs,
+		ValidatorTimeoutHighQCViews:        views,
+		ValidatorCombinedTimeoutSignatures: BLSMultiSignature{[]byte("a"), []byte("a")},
 	}
 
 	// Construct the block and include the aggregateQC.
 	block := Block{
-		PreviousBlockHash: highQC.BlockHash,
-		ProposerPublicKey: myPublicKey,
-		Txns:              GetTxns(),
-		View:              currentView,
+		ProposerPublicKey: *node.PubKey,
+		Txns:              GenerateTxns(10),
+		// NOTE(diamondhands): See my comment in handleVoteMessageFromPeer where we
+		// set block.View. I think the exact same logic applies here. Notice that you
+		// could alternatively set this to timeoutMsg.View + 1, but I think this is
+		// a bit clearer because it's what is checked explicilty by safeVote.
+		View: aggregateQC.View + 1,
 		// Setting the QC is technically redundant when we have an AggregateQC but
 		// we set it anyway for convenience.
 		QC:          highQC,
@@ -603,58 +1020,9 @@ func handleTimeoutMessageFromPeer(timeoutMsg TimeoutMessage) {
 	}
 
 	// Sign the block using the leader’s private key.
-	block.ProposerSignature = Sign(block, myPrivateKey)
+	block.ProposerSignature, _ = Sign(Hash(block.View, block.Txns), *node.PrivKey)
 	// Blast the block to everyone including yourself. This means we'll process
 	// this block in handleBlockFromPeer, where we'll also update our highestQC and
 	// advance to the next view.
 	broadcast(block)
-}
-
-// This is the node's main message and event handling loop. We continuously loop,
-// incrementing the view with each round.
-func StartConsensus() {
-	// We run an infinite loop, and process each message from our peers as it
-	// comes in. Note that the timeout is also something we might process as
-	// part of this main loop. If you are unfamiliar with the concept of a "select"
-	// statement, we recommend referencing Go's implementation here:
-	// - https://golangdocs.com/select-statement-in-golang
-	for {
-		select {
-		case messageFromPeer := <-networkChannel.WaitForMessage():
-			if messageFromPeer.MessageType() == BlockMessageType {
-				handleBlockFromPeer(messageFromPeer)
-
-			} else if messageFromPeer.MessageType() == VoteMessageType {
-				handleVoteMessageFromPeer(messageFromPeer)
-
-			} else if messageFromPeer.MessageType() == TimeoutMessageType {
-				handleTimeoutMessageFromPeer(messageFromPeer)
-
-			}
-		case <-WaitForTimeout():
-			// WaitForTimeout() is a function that will emit a value
-			// whenever a timeout is triggered, causing us to enter this part
-			// of the code. It can be assumed that calling
-			// ResetTimeout(timeoutValue) will cause WaitForTimeout() to emit
-			// a value after timeoutValue seconds have elapsed (ignoring all
-			// previous calls to ResetTimeout()).
-
-			// Construct the timeout message
-			timeoutMsg := TimeoutMessage{
-				ValidatorPublicKey:          myPublicKey,
-				TimeoutView:                 currentView,
-				HighQC:                      highestQC,
-				PartialTimeoutViewSignature: Sign(Hash(currentView, highestQC.View), myPrivateKey),
-			}
-
-			// Send the timeout message and send it to the next leader .
-			Send(timeoutMsg, computeLeader(currentView+1))
-
-			// We use exponential backoff for timeouts in this reference
-			// implementation.
-			ResetTimeoutAndAdvanceView(2 * timeoutSeconds)
-		case <-WaitForQuitSignal():
-			Exit()
-		}
-	}
 }
