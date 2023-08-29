@@ -17,7 +17,7 @@ func TestTimer(t *testing.T) {
 
 	node := &Node{
 		Id:      1,
-		CurView: 0,
+		CurView: 1,
 		HighestQC: &QuorumCertificate{
 			View:                           0,
 			BlockHash:                      Hash(genesisBlock.View, genesisBlock.Txns),
@@ -44,7 +44,7 @@ func TestTimer(t *testing.T) {
 	timer.Stop()
 
 	// Check the value of node's view
-	if node.CurView != 1 {
+	if node.CurView != 2 {
 		t.Errorf("Expected node's view to be 1, but got %d", node.CurView)
 	}
 	if node.Last_voted_view != 1 {
@@ -95,7 +95,7 @@ func TestAppendTimeoutMessage(t *testing.T) {
 
 	timeoutMsg := timer.CreateTimeout_msg(node)
 	// We set view to 7 because that's when the current node happens to be the leader.
-	timeoutMsg.View = 7
+	timeoutMsg.View = 6
 
 	fmt.Println("timeout msg is ", timeoutMsg)
 	node.timeoutsSeen = timeoutsSeen
@@ -244,7 +244,7 @@ func TestHandleTimeoutMessagesForBlockCreation(t *testing.T) {
 	// Create timeout messages from different public keys
 	timeoutMsg1 := TimeoutMessage{
 		ValidatorPublicKey:          node.ValidatorPubKeys[0],
-		View:                        node.CurView + 1,
+		View:                        node.CurView,
 		HighQC:                      *node.HighestQC,
 		PartialTimeoutViewSignature: []byte("signature1"),
 	}
@@ -252,7 +252,7 @@ func TestHandleTimeoutMessagesForBlockCreation(t *testing.T) {
 
 	timeoutMsg2 := TimeoutMessage{
 		ValidatorPublicKey:          node.ValidatorPubKeys[1],
-		View:                        node.CurView + 1,
+		View:                        node.CurView,
 		HighQC:                      *node.HighestQC,
 		PartialTimeoutViewSignature: []byte("signature2"),
 	}
@@ -260,14 +260,14 @@ func TestHandleTimeoutMessagesForBlockCreation(t *testing.T) {
 
 	timeoutMsg3 := TimeoutMessage{
 		ValidatorPublicKey:          node.ValidatorPubKeys[2],
-		View:                        node.CurView + 1,
+		View:                        node.CurView,
 		HighQC:                      *node.HighestQC,
 		PartialTimeoutViewSignature: []byte("signature3"),
 	}
 
 	timeoutMsg4 := TimeoutMessage{
 		ValidatorPublicKey:          node.ValidatorPubKeys[3],
-		View:                        node.CurView + 1,
+		View:                        node.CurView,
 		HighQC:                      *node.HighestQC,
 		PartialTimeoutViewSignature: []byte("signature4"),
 	}
