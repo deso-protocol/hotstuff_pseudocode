@@ -1,6 +1,6 @@
 //go:build relic
 
-package main
+package hotstuff_pseudocode
 
 import (
 	"context"
