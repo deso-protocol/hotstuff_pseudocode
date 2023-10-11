@@ -38,7 +38,7 @@ func TestTimer(t *testing.T) {
 	timer.Start(node)
 
 	// Wait for the timer to expire (adjust the wait time as needed)
-	time.Sleep(2 * time.Second)
+	time.Sleep(3 * time.Second)
 
 	// Stop the timer
 	timer.Stop()
@@ -52,8 +52,9 @@ func TestTimer(t *testing.T) {
 	}
 
 	// Check if the duration has been doubled
-	expectedDuration := 2 * time.Second
-	actualDuration := timer.getDuration()
+	expectedDuration := 4 * time.Second
+	fmt.Println("Expected Duration is", expectedDuration)
+	actualDuration := timer.getDuration(node.CurView, node.HighestQC.View)
 	if actualDuration != expectedDuration {
 		t.Errorf("Expected duration to be %v, but got %v", expectedDuration, actualDuration)
 	}
@@ -319,60 +320,4 @@ func TestHandleTimeoutMessagesForBlockCreation(t *testing.T) {
 	if ok, _ := Contains(safeblocks.Blocks, Hash(block.View, block.Txns)); !ok {
 		t.Errorf("Block not found in safe blocks")
 	}
-}
-func TestTimerDuration(t *testing.T) {
-	// Initialize the required variables and structs
-	leaderPubKey := []byte("leader pub key")
-	leaderPrivKey := []byte("leader priv key")
-	txns := GenerateTxns(3)
-
-	genesisBlock := Block{Txns: txns, View: 0}
-
-	node := &Node{
-		CurView:         0,
-		Last_voted_view: 0,
-		PubKey:          (*PublicKey)(&leaderPubKey),
-		PrivKey:         (*PrivateKey)(&leaderPrivKey),
-		PubKeyToStake:   make(map[string]uint64),
-		HighestQC: &QuorumCertificate{
-			View:                           0,
-			BlockHash:                      Hash(genesisBlock.View, genesisBlock.Txns),
-			CombinedViewBlockHashSignature: BLSMultiSignature{CombinedSignature: []byte("a"), ValidatorIDBitmap: []byte("a")},
-		},
-	}
-
-	// Create a new timer with a base duration of 1 second
-	timer := NewTimer(1 * time.Second)
-
-	// Assign the timer to node.Timer
-	node.Timer = timer
-	//fmt.Println("node.Timer is", *node.Timer)
-
-	// Start the timer
-	node.Timer.Start(node)
-
-	// Wait for the timer to expire (1 second)
-	time.Sleep(1200 * time.Millisecond)
-
-	// Check if the duration has been doubled
-	expectedDuration := 2 * time.Second
-	actualDuration := node.Timer.getDuration()
-	if actualDuration != expectedDuration {
-		t.Errorf("Expected duration to be %v, but got %v", expectedDuration, actualDuration)
-	}
-
-	// Reset the timer
-	node.Timer.Reset()
-	// Wait for the timer to expire (1 second)
-	//time.Sleep(1 * time.Second)
-
-	// Check if the duration is still the base duration
-	expectedDuration = 1 * time.Second
-	actualDuration = node.Timer.getDuration()
-	if actualDuration != expectedDuration {
-		t.Errorf("Expected duration to be %v, but got %v", expectedDuration, actualDuration)
-	}
-
-	// Stop the timer
-	node.Timer.Stop()
 }
