@@ -233,7 +233,7 @@ func (node *Node) AdvanceView(block *Block) {
 	}
 	fmt.Println("node.Timer is", *node.Timer)
 
-	node.Timer.Reset()
+	node.Timer.Reset(node)
 }
 
 // GetBlockIDForView returns the block ID / hash for a given view.
@@ -258,7 +258,9 @@ func (node *Node) IsLeader(view uint64) bool {
 // commitChainFromGrandParent represents our commit rule. It is called whenever we receive a new block to determine
 // if we can commit any blocks that we've previously received. The Fast-HotStuff commit rule finalizes blocks once
 // we observe a two-chain involving a direct one-chain. In other words, we must observe a sequence of three blocks:
-// 		B1 - B2 - ... - B3
+//
+//	B1 - B2 - ... - B3
+//
 // such that B1 is the parent of B2, and B2 is an ancestor of B3. The ancestor-descendant relationship is established
 // whenever a block contains the QC for another block. We say that this block is the descendant of the other block.
 // In particular, if the two blocks were proposed with consecutive views, we say these blocks are in a parent-child
@@ -749,7 +751,7 @@ func NewTimer(baseDuration time.Duration) *Timer {
 }
 
 func (t *Timer) Start(node *Node) {
-	t.timer = time.AfterFunc(t.getDuration(), func() {
+	t.timer = time.AfterFunc(t.getDuration(node.CurView, node.HighestQC.View), func() {
 		t.onTimeout(node)
 	})
 }
@@ -762,16 +764,16 @@ func (t *Timer) Stop() {
 
 // After a successful view Reset() is called. Number of retries is 0 so that we get the base duration when
 // getDuration() is called.
-func (t *Timer) Reset() {
+func (t *Timer) Reset(node *Node) {
 	t.Stop()
 	t.retries = 0
-	t.timer.Reset(t.getDuration())
+	t.timer.Reset(t.getDuration(node.CurView, node.HighestQC.View))
 }
 
 // Duration gets doubled each time when onTimeout(). It's function of the number of retries.
 func (t *Timer) onTimeout(node *Node) {
 
-	t.retries = t.retries + 1
+	//t.retries = t.retries + 1
 	timeoutMsg := t.CreateTimeout_msg(node)
 	leader, _ := computeLeader(node.CurView+1, node.PubKeyToStake)
 	Send(timeoutMsg, PublicKey(leader))
@@ -782,8 +784,8 @@ func (t *Timer) onTimeout(node *Node) {
 	t.Start(node)
 }
 
-func (t *Timer) getDuration() time.Duration {
-	return t.baseDuration * time.Duration(1<<uint(t.retries))
+func (t *Timer) getDuration(cur_view, high_qc_view uint64) time.Duration {
+	return t.baseDuration * time.Duration(math.Pow(2, float64(cur_view-high_qc_view)))
 }
 
 func (t *Timer) CreateTimeout_msg(node *Node) *TimeoutMessage {

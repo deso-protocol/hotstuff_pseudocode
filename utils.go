@@ -281,4 +281,6 @@ func Send(msg interface{}, nextleader PublicKey) {
 
 // Broadcast represents a network primitive responsible for broadcasting a block to all validators. We leave it
 // unimplemented for the sake of simplicity.
-func Broadcast(block Block) {}
+// A leader either broadcasts a block, a QC or an AggQC such that  f<|QC|<2f+1 or f<|AggQC|<2f+1.
+// If a leader is not able to collect at least 2f+1 votes or QCs then
+func Broadcast(msg interface{}) {}
